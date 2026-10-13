@@ -15,16 +15,7 @@ val AppJson = Json {
 }
 
 @Serializable
-data class EndpointDto(val url: String, val kind: String = "public")
-
-@Serializable
-data class PingDto(
-    val app: String = "",
-    val library: String = "",
-    val items: Int = 0,
-    /** Every address the server can be reached at (managed in the 片库整理 panel). */
-    val endpoints: List<EndpointDto> = emptyList(),
-)
+data class PingDto(val app: String = "", val library: String = "", val items: Int = 0)
 
 @Serializable
 data class FolderDto(

@@ -6,15 +6,7 @@ import androidx.sqlite.db.SimpleSQLiteQuery
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
-import java.util.concurrent.TimeUnit
 
 sealed interface Filter {
     data object All : Filter
@@ -74,11 +66,6 @@ class Prefs(context: Context) {
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
 
-    /** All known server addresses (LAN + public), refreshed from the server on every ping. */
-    var endpointsJson: String
-        get() = sp.getString("endpoints", "[]") ?: "[]"
-        set(v) = sp.edit().putString("endpoints", v).apply()
-
     val isConfigured get() = baseUrl.isNotEmpty() && token.isNotEmpty()
 }
 
@@ -89,91 +76,19 @@ class Repository(
 ) {
     val dao = db.itemDao()
 
-    /** Current base URL; changes when the best route switches between LAN and public. */
-    val baseUrl = MutableStateFlow(prefs.baseUrl)
-
-    // Probing must be quick: unreachable LAN addresses shouldn't stall the switch to the public route.
-    private val probeHttp = http.newBuilder()
-        .connectTimeout(2, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.SECONDS)
-        .callTimeout(6, TimeUnit.SECONDS)
-        .build()
-
     private fun api() = Api(http, prefs.baseUrl, prefs.token)
 
-    fun endpoints(): List<EndpointDto> =
-        runCatching { AppJson.decodeFromString<List<EndpointDto>>(prefs.endpointsJson) }.getOrDefault(emptyList())
-
-    val isLanRoute get() = isPrivateUrl(prefs.baseUrl)
-
-    private class Probe(val endpoint: EndpointDto, val ping: PingDto)
-
-    /**
-     * Find the best reachable address — LAN first (known LAN addresses, then a LAN broadcast),
-     * then public ones — and make it the active route. Returns the server's ping, or null.
-     * Throws ApiException("Token 不正确") if a server answered but rejected the token.
-     */
-    suspend fun resolveBest(
-        token: String = prefs.token,
-        extra: List<EndpointDto> = emptyList(),
-        discover: Boolean = true,
-    ): PingDto? {
-        val known = (extra + endpoints() +
-            listOfNotNull(prefs.baseUrl.takeIf { it.isNotEmpty() }?.let { EndpointDto(it, kindOf(it)) }))
-            .distinctBy { it.url }
-        var badToken = false
-
-        suspend fun tryAll(list: List<EndpointDto>): Probe? = coroutineScope {
-            list.map { ep ->
-                async {
-                    try {
-                        val ping = Api(probeHttp, ep.url, token).ping()
-                        if (ping.app == "eagle-lan") Probe(ep, ping) else null
-                    } catch (e: ApiException) {
-                        if (e.message?.contains("Token") == true) badToken = true
-                        null
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            }.awaitAll().firstOrNull { it != null }
-        }
-
-        val hit = tryAll(known.filter { it.kind == "lan" })
-            ?: (if (discover) tryAll(Discovery.find().map { EndpointDto(it, "lan") }.filter { d -> known.none { it.url == d.url } }) else null)
-            ?: tryAll(known.filter { it.kind != "lan" })
-        if (hit == null) {
-            if (badToken) throw ApiException("Token 不正确")
-            return null
-        }
-        prefs.baseUrl = hit.endpoint.url
-        baseUrl.value = hit.endpoint.url
-        if (hit.ping.endpoints.isNotEmpty()) {
-            prefs.endpointsJson = AppJson.encodeToString(hit.ping.endpoints)
-        }
-        return hit.ping
-    }
-
-    private fun kindOf(url: String) = if (isPrivateUrl(url)) "lan" else "public"
+    suspend fun ping(): PingDto = api().ping()
 
     fun thumbUrl(id: String) = api().thumbUrl(id)
     fun fileUrl(id: String) = api().fileUrl(id)
 
-    /**
-     * Set up with just a token (the computer is found on the LAN), a connection code from the
-     * 片库整理 panel ("rudao:…", carries token + addresses), or optionally a manual address.
-     * Connecting to a different library wipes the local mirror.
-     */
-    suspend fun connect(input: String, manualHost: String = ""): PingDto {
-        val (token, codeEndpoints) = parseConnectInput(input.trim())
-        val extra = codeEndpoints + listOfNotNull(
-            manualHost.takeIf { it.isNotBlank() }?.let { Api.normalizeBaseUrl(it) }?.let { EndpointDto(it, kindOf(it)) }
-        )
-        if (token != prefs.token) prefs.endpointsJson = "[]"   // don't reuse another server's addresses
-        val ping = resolveBest(token, extra) ?: throw ApiException(
-            "找不到电脑上的服务。在家请确认手机和电脑连着同一个 Wi-Fi；在外面请使用插件里的「连接码」。"
-        )
-        if (prefs.libraryName.isNotEmpty() && ping.library != prefs.libraryName) {
+    /** Verifies the server, then saves it. Switching servers wipes the local mirror. */
+    suspend fun connect(host: String, token: String): PingDto {
+        val base = Api.normalizeBaseUrl(host)
+        val ping = Api(http, base, token.trim()).ping()
+        if (ping.app != "eagle-lan") throw ApiException("这个地址不是 Eagle LAN 服务")
+        if (base != prefs.baseUrl) {
             db.withTransaction {
                 dao.clearFolderRefs()
                 dao.clearTagRefs()
@@ -182,35 +97,17 @@ class Repository(
             prefs.cursor = 0
             prefs.foldersJson = "[]"
         }
-        prefs.token = token
+        prefs.baseUrl = base
+        prefs.token = token.trim()
         prefs.libraryName = ping.library
         return ping
-    }
-
-    private fun parseConnectInput(input: String): Pair<String, List<EndpointDto>> {
-        if (!input.startsWith("rudao:")) return input to emptyList()
-        return try {
-            val json = String(android.util.Base64.decode(input.removePrefix("rudao:"), android.util.Base64.URL_SAFE))
-            val obj = AppJson.parseToJsonElement(json).jsonObject
-            val token = obj["t"]!!.jsonPrimitive.content
-            val urls = obj["e"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
-            token to urls.map { EndpointDto(it, kindOf(it)) }
-        } catch (e: Exception) {
-            throw ApiException("连接码格式不对，请从插件里重新复制")
-        }
     }
 
     /** Incremental sync. Returns the number of items received. */
     suspend fun sync(): Int {
         // A wiped/migrated local DB must re-download everything.
         if (dao.localCount() == 0) prefs.cursor = 0
-        val r = try {
-            api().sync(prefs.cursor)
-        } catch (e: java.io.IOException) {
-            // current route went away (e.g. left home): switch and retry once
-            resolveBest() ?: throw e
-            api().sync(prefs.cursor)
-        }
+        val r = api().sync(prefs.cursor)
         db.withTransaction {
             r.items.chunked(400).forEach { chunk ->
                 val ids = chunk.map { it.id }
