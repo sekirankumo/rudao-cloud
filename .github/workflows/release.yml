@@ -1,0 +1,57 @@
+# Push a tag like v0.3.0 to build a signed APK and publish it as a GitHub Release.
+# The app checks the latest release on launch and offers to update.
+#
+#   git tag -a v0.3.0 -m "更新说明（显示在 App 的更新提示里）"
+#   git push origin v0.3.0
+#
+# Required repository secret:
+#   SIGNING_KEYSTORE_B64  base64 of the keystore used for all builds (keeps updates installable)
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing key
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        run: |
+          test -n "$SIGNING_KEYSTORE_B64" || { echo "::error::secret SIGNING_KEYSTORE_B64 is missing"; exit 1; }
+          echo "$SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/signing.keystore"
+
+      - name: Build
+        env:
+          SIGNING_KEYSTORE: ${{ runner.temp }}/signing.keystore
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon \
+            -PversionName="${GITHUB_REF_NAME#v}" \
+            -PversionCode=$((GITHUB_RUN_NUMBER + 1))
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force --tags
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.md
+          APK="rudao-cloud-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          gh release create "$GITHUB_REF_NAME" "$APK" --title "$GITHUB_REF_NAME" --notes-file notes.md

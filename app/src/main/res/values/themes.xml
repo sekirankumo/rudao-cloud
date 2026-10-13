@@ -1,0 +1,8 @@
+<resources>
+    <color name="launcher_bg">#2F7BF5</color>
+    <style name="Theme.EagleLAN" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF111214</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
