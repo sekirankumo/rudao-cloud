@@ -121,6 +121,8 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
     val sort by vm.sort.collectAsStateWithLifecycle()
     val thumbWidth by vm.thumbWidth.collectAsStateWithLifecycle()
     val conn by vm.conn.collectAsStateWithLifecycle()
+    // read so thumbnails pick up the new address when the route switches
+    val baseUrl by vm.baseUrl.collectAsStateWithLifecycle()
     val syncing by vm.syncing.collectAsStateWithLifecycle()
     val search by vm.search.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
@@ -231,7 +233,7 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
                                     Text(filterTitle(filter), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 Text(
-                                    "${items.size} 项",
+                                    "${items.size} 项" + if (conn == Conn.ONLINE) " · ${vm.route}" else "",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -353,7 +355,7 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     itemsIndexed(items, key = { _, it -> it.id }) { index, item ->
-                        ThumbCell(item, vm.thumbUrl(item), showName = gridWidth / gridColumns >= 110) { onOpen(index) }
+                        ThumbCell(item, vm.thumbUrl(item, baseUrl), showName = gridWidth / gridColumns >= 110) { onOpen(index) }
                     }
                 }
                 if (pinching) {
@@ -462,7 +464,11 @@ private fun ThumbCell(item: ItemEntity, thumbUrl: String, showName: Boolean, onC
         ) {
             if (item.hasThumb) {
                 AsyncImage(
-                    model = remember(thumbUrl) { ImageRequest.Builder(context).data(thumbUrl).build() },
+                    model = remember(thumbUrl) {
+                        // cache by item, not URL, so LAN/public route switches reuse cached thumbnails
+                        val key = "thumb-${item.id}-${item.mtime}"
+                        ImageRequest.Builder(context).data(thumbUrl).diskCacheKey(key).memoryCacheKey(key).build()
+                    },
                     contentDescription = item.name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

@@ -131,12 +131,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         connDetail.value = detail
     }
 
-    /** Lightweight reachability check (the UI calls this periodically while visible). */
+    val baseUrl = repo.baseUrl
+    val route get() = if (repo.isLanRoute) "局域网" else "外网"
+
+    /** Picks the best route (LAN first) and updates the indicator; the UI calls this every 30s while visible. */
     suspend fun checkConnection() {
         if (!configured.value) return
+        val before = repo.baseUrl.value
         try {
-            val ping = repo.ping()
-            setConn(true, "${ping.library} · ${ping.items} 项")
+            val ping = repo.resolveBest()
+            if (ping == null) {
+                setConn(false, "所有地址都连不上")
+                return
+            }
+            setConn(true, "$route · ${ping.library} · ${ping.items} 项")
+            if (before.isNotEmpty() && before != repo.baseUrl.value) message.value = "已切换到$route"
         } catch (e: Exception) {
             setConn(false, e.message ?: e.javaClass.simpleName)
         }
@@ -209,8 +218,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Returns an error message, or null on success. */
-    suspend fun connect(host: String, token: String): String? = try {
-        repo.connect(host, token)
+    suspend fun connect(input: String, manualHost: String = ""): String? = try {
+        repo.connect(input, manualHost)
+        setConn(true, "$route · ${prefs.libraryName}")
         libraryName.value = prefs.libraryName
         configured.value = true
         filter.value = Filter.All
@@ -234,7 +244,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
 
-    fun thumbUrl(item: ItemEntity) = repo.thumbUrl(item.id) + "&v=${item.mtime}"
+    @Suppress("UNUSED_PARAMETER")
+    fun thumbUrl(item: ItemEntity, base: String = "") = repo.thumbUrl(item.id) + "&v=${item.mtime}"
     fun fileUrl(item: ItemEntity) = repo.fileUrl(item.id)
 }
 
