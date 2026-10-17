@@ -37,6 +37,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
@@ -93,7 +95,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /** Remembers where each video was left off, for this app session. */
-private object PlaybackMemory {
+internal object PlaybackMemory {
     val positions = HashMap<String, Long>()
 }
 
@@ -101,6 +103,7 @@ private object PlaybackMemory {
 @Composable
 fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
     val items by vm.items.collectAsStateWithLifecycle()
+    val favorites by vm.favorites.collectAsStateWithLifecycle()
     BackHandler(onBack = onClose)
     if (items.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
@@ -203,6 +206,14 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                             },
                             color = Color(0xB3FFFFFF),
                             style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    val fav = current.id in favorites
+                    IconButton(onClick = { vm.toggleFavorite(current.id) }) {
+                        Icon(
+                            if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (fav) "取消收藏" else "收藏",
+                            tint = if (fav) FAVORITE_RED else Color.White,
                         )
                     }
                 }
@@ -318,6 +329,7 @@ private fun ActiveVideo(
         var swipeStart by remember { mutableLongStateOf(0L) }
         var swipeTarget by remember { mutableLongStateOf(0L) }
         var swipeDx by remember { mutableFloatStateOf(0f) }
+        var boosting by remember { mutableStateOf(false) }
 
         LaunchedEffect(player) {
             while (isActive) {
@@ -354,13 +366,28 @@ private fun ActiveVideo(
                 .fillMaxSize()
                 .pointerInput(player) {
                     detectTapGestures(
+                        onPress = {
+                            tryAwaitRelease()
+                            if (boosting) {
+                                boosting = false
+                                player.setPlaybackSpeed(speed)
+                            }
+                        },
+                        onLongPress = {
+                            boosting = true
+                            player.setPlaybackSpeed(2f)
+                            if (!player.isPlaying) player.play()
+                        },
                         onTap = { onToggleChrome() },
                         onDoubleTap = {
                             if (player.isPlaying) player.pause() else player.play()
                         },
                     )
                 }
-                .pointerInput(player) {
+                // Re-keyed on boosting: while held at 2x no drag detector runs, so moving the
+                // finger neither seeks nor cancels the long-press.
+                .pointerInput(player, boosting) {
+                    if (boosting) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragStart = {
                             swipeStart = player.currentPosition
@@ -384,6 +411,20 @@ private fun ActiveVideo(
                     )
                 },
         )
+
+        if (boosting) {
+            Text(
+                "▶▶ 2x 倍速中",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 56.dp)
+                    .background(Color(0x99000000), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
 
         if (swiping) {
             val delta = swipeTarget - swipeStart

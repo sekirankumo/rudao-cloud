@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
-data class Totals(val all: Int = 0, val uncategorized: Int = 0, val trash: Int = 0)
+data class Totals(val all: Int = 0, val uncategorized: Int = 0, val trash: Int = 0, val favorites: Int = 0)
 
 data class TagGroup(val name: String, val total: Int, val tags: List<TagCount>)
 
@@ -96,8 +96,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     val totals: StateFlow<Totals> =
-        combine(repo.dao.countAll(), repo.dao.countUncategorized(), repo.dao.countTrash()) { a, u, t -> Totals(a, u, t) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, Totals())
+        combine(repo.dao.countAll(), repo.dao.countUncategorized(), repo.dao.countTrash(), repo.dao.countFavorites()) { a, u, t, f ->
+            Totals(a, u, t, f)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, Totals())
+
+    /** Phone-local favourites (item ids). */
+    val favorites: StateFlow<Set<String>> =
+        repo.dao.favoriteIds()
+            .map { it.toHashSet() }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    val showFolders = MutableStateFlow(prefs.showFolders)
+    val previewSeconds = MutableStateFlow(prefs.previewSeconds)
 
     val serverUrl get() = prefs.baseUrl
     val serverToken get() = prefs.token
@@ -223,6 +233,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setSort(s: Sort) {
         sort.value = s
         prefs.sort = s.name
+    }
+
+    /** Returns true if the item is now a favourite. */
+    fun toggleFavorite(id: String): Boolean {
+        val add = id !in favorites.value
+        viewModelScope.launch {
+            if (add) repo.dao.addFavorite(com.eaglelan.app.data.Favorite(id, System.currentTimeMillis()))
+            else repo.dao.removeFavorite(id)
+        }
+        return add
+    }
+
+    fun setShowFolders(show: Boolean) {
+        showFolders.value = show
+        prefs.showFolders = show
+        // leaving a folder view that is no longer reachable from the sidebar
+        if (!show && filter.value !in listOf(Filter.All, Filter.Favorites)) filter.value = Filter.All
+    }
+
+    fun setPreviewSeconds(sec: Int) {
+        previewSeconds.value = sec
+        prefs.previewSeconds = sec
     }
 
     fun toggleTag(tag: String) {

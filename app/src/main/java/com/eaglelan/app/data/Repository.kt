@@ -12,6 +12,7 @@ sealed interface Filter {
     data object All : Filter
     data object Uncategorized : Filter
     data object Trash : Filter
+    data object Favorites : Filter
     data class Folder(val id: String, val name: String) : Filter
 }
 
@@ -65,6 +66,15 @@ class Prefs(context: Context) {
     var lastUpdateCheck: Long
         get() = sp.getLong("lastUpdateCheck", 0)
         set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
+
+    /** Show the Eagle folder tree (and 未分类 / 回收站) in the sidebar. */
+    var showFolders: Boolean
+        get() = sp.getBoolean("showFolders", false)
+        set(v) = sp.edit().putBoolean("showFolders", v).apply()
+    /** 随机速览 clip length. */
+    var previewSeconds: Int
+        get() = sp.getInt("previewSeconds", 10)
+        set(v) = sp.edit().putInt("previewSeconds", v).apply()
 
     val isConfigured get() = baseUrl.isNotEmpty() && token.isNotEmpty()
 }
@@ -143,6 +153,10 @@ class Repository(
                 where += "items.folders = ''"
             }
             Filter.Trash -> where += "items.isDeleted = 1"
+            Filter.Favorites -> {
+                sql.append("INNER JOIN favorites fav ON fav.itemId = items.id ")
+                where += "items.isDeleted = 0"
+            }
             is Filter.Folder -> {
                 sql.append("INNER JOIN item_folder f ON f.itemId = items.id ")
                 where += "f.folderId = ?"
@@ -161,7 +175,9 @@ class Repository(
             args.addAll(group)
         }
         sql.append("WHERE ").append(where.joinToString(" AND "))
-        sql.append(" ORDER BY ").append(sort.sql)
+        // In 收藏 the default order is "most recently favourited first".
+        val order = if (filter == Filter.Favorites && sort == Sort.ADDED) "fav.addedAt DESC" else sort.sql
+        sql.append(" ORDER BY ").append(order)
         return dao.observe(SimpleSQLiteQuery(sql.toString(), args.toTypedArray()))
     }
 }

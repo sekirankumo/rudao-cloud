@@ -70,6 +70,10 @@ data class ItemFolder(val itemId: String, val folderId: String)
 )
 data class ItemTag(val itemId: String, val tag: String)
 
+/** Phone-local favourites; never sent to the computer or written to Eagle. */
+@Entity(tableName = "favorites")
+data class Favorite(@PrimaryKey val itemId: String, val addedAt: Long)
+
 data class FolderCount(val folderId: String, val n: Int)
 
 data class TagCount(val tag: String, val n: Int)
@@ -82,7 +86,7 @@ fun tagValueOf(tag: String) = if (':' in tag) tag.substringAfter(':').trim() els
 
 @Dao
 interface ItemDao {
-    @RawQuery(observedEntities = [ItemEntity::class, ItemFolder::class, ItemTag::class])
+    @RawQuery(observedEntities = [ItemEntity::class, ItemFolder::class, ItemTag::class, Favorite::class])
     fun observe(query: SupportSQLiteQuery): Flow<List<ItemEntity>>
 
     @Upsert
@@ -112,6 +116,21 @@ interface ItemDao {
     @Query("SELECT COUNT(*) FROM items")
     suspend fun localCount(): Int
 
+    @Query("SELECT itemId FROM favorites")
+    fun favoriteIds(): Flow<List<String>>
+
+    @Query("SELECT COUNT(*) FROM favorites f JOIN items i ON i.id = f.itemId WHERE i.isDeleted = 0")
+    fun countFavorites(): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun addFavorite(f: Favorite)
+
+    @Query("DELETE FROM favorites WHERE itemId = :id")
+    suspend fun removeFavorite(id: String)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE itemId = :id)")
+    suspend fun isFavorite(id: String): Boolean
+
     @Query("SELECT id FROM items")
     suspend fun allIds(): List<String>
 
@@ -140,14 +159,30 @@ interface ItemDao {
     fun countTrash(): Flow<Int>
 }
 
-@Database(entities = [ItemEntity::class, ItemFolder::class, ItemTag::class], version = 2, exportSchema = false)
+@Database(
+    entities = [ItemEntity::class, ItemFolder::class, ItemTag::class, Favorite::class],
+    version = 3,
+    exportSchema = false,
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun itemDao(): ItemDao
 
     companion object {
         fun create(context: Context) =
             Room.databaseBuilder(context, AppDatabase::class.java, "library.db")
-                .fallbackToDestructiveMigration()
+                // Favourites can't be re-synced from the computer, so every schema change from here on
+                // needs a real migration. The destructive fallback only covers the pre-favourites v1.
+                .addMigrations(MIGRATION_2_3)
+                .fallbackToDestructiveMigrationFrom(1)
                 .build()
+
+        private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `favorites` (`itemId` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`itemId`))"
+                )
+            }
+        }
     }
 }

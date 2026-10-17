@@ -1,7 +1,12 @@
 package com.eaglelan.app.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,8 +14,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,47 +28,52 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.itemsIndexed
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOff
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PermanentDrawerSheet
 import androidx.compose.material3.PermanentNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
@@ -79,12 +91,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.eaglelan.app.data.Filter
@@ -93,29 +115,16 @@ import com.eaglelan.app.data.ItemEntity
 import com.eaglelan.app.data.Sort
 import com.eaglelan.app.data.aspectRatio
 import com.eaglelan.app.data.isVideo
+import com.eaglelan.app.data.tagValueOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.repeatOnLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Unit) {
+fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Unit, onPreview: () -> Unit) {
     val items by vm.items.collectAsStateWithLifecycle()
     val filter by vm.filter.collectAsStateWithLifecycle()
     val sort by vm.sort.collectAsStateWithLifecycle()
@@ -126,15 +135,16 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
     val message by vm.message.collectAsStateWithLifecycle()
     val selectedTags by vm.selectedTags.collectAsStateWithLifecycle()
     val seed by vm.shuffleSeed.collectAsStateWithLifecycle()
+    val favorites by vm.favorites.collectAsStateWithLifecycle()
+    val showFolders by vm.showFolders.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val gridState = rememberLazyStaggeredGridState()
     val snackbar = remember { SnackbarHostState() }
+    val haptics = LocalHapticFeedback.current
     var searching by rememberSaveable { mutableStateOf(false) }
-    var sortMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
-    var tagSheet by rememberSaveable { mutableStateOf(false) }
     var pinching by remember { mutableStateOf(false) }
 
     // Connection indicator: re-check every 30s while the screen is visible.
@@ -150,13 +160,12 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
 
     LaunchedEffect(message) {
         message?.let {
+            snackbar.currentSnackbarData?.dismiss()
             snackbar.showSnackbar(it)
             vm.message.value = null
         }
     }
     LaunchedEffect(filter, sort, selectedTags, seed) { gridState.scrollToItem(0) }
-
-    if (tagSheet) TagFilterSheet(vm, onDismiss = { tagSheet = false })
 
     // Tablets / wide windows: pinned sidebar, and more columns at the same thumbnail size.
     val screenWidth = LocalConfiguration.current.screenWidthDp
@@ -247,37 +256,36 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
                         } else {
                             IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, "搜索") }
                         }
-                        IconButton(onClick = { tagSheet = true }) {
-                            BadgedBox(badge = {
-                                if (selectedTags.isNotEmpty()) Badge { Text("${selectedTags.size}") }
-                            }) {
-                                Icon(Icons.Default.FilterList, "按标签筛选")
-                            }
-                        }
-                        Box {
-                            IconButton(onClick = { sortMenu = true }) {
-                                Icon(Icons.AutoMirrored.Filled.Sort, "排序")
-                            }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                Sort.entries.forEach { s ->
-                                    DropdownMenuItem(
-                                        text = { Text(s.label) },
-                                        leadingIcon = { RadioButton(selected = s == sort, onClick = null) },
-                                        onClick = {
-                                            vm.setSort(s)
-                                            sortMenu = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
+                        IconButton(onClick = onPreview) { Icon(Icons.Default.PlayCircleOutline, "随机速览") }
                         Box {
                             IconButton(onClick = { moreMenu = true }) {
                                 Icon(Icons.Default.MoreVert, "更多")
                             }
                             DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                                Text(
+                                    "排序",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
+                                )
+                                Sort.entries.forEach { s ->
+                                    DropdownMenuItem(
+                                        text = { Text(s.label) },
+                                        leadingIcon = { RadioButton(selected = s == sort, onClick = null) },
+                                        onClick = {
+                                            if (s == Sort.RANDOM) vm.startRandom() else vm.setSort(s)
+                                            moreMenu = false
+                                        },
+                                    )
+                                }
+                                HorizontalDivider()
                                 ThumbSizeSlider(thumbWidth, gridColumns) { vm.setThumbWidth(it) }
                                 HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("显示 Eagle 文件夹") },
+                                    leadingIcon = { Checkbox(checked = showFolders, onCheckedChange = null) },
+                                    onClick = { vm.setShowFolders(!showFolders) },
+                                )
                                 DropdownMenuItem(
                                     text = { Text("检查更新（当前 v${vm.appVersion}）") },
                                     leadingIcon = { Icon(Icons.Default.SystemUpdate, null) },
@@ -353,7 +361,17 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     itemsIndexed(items, key = { _, it -> it.id }) { index, item ->
-                        ThumbCell(item, vm.thumbUrl(item), showName = gridWidth / gridColumns >= 110) { onOpen(index) }
+                        ThumbCell(
+                            item = item,
+                            thumbUrl = vm.thumbUrl(item),
+                            showName = gridWidth / gridColumns >= 110,
+                            favorite = item.id in favorites,
+                            onClick = { onOpen(index) },
+                            onLongClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                vm.message.value = if (vm.toggleFavorite(item.id)) "已收藏" else "已取消收藏"
+                            },
+                        )
                     }
                 }
                 if (pinching) {
@@ -369,9 +387,15 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
                 }
                 if (items.isEmpty() && !syncing) {
                     Text(
-                        if (search.isNotBlank() || selectedTags.isNotEmpty()) "没有匹配的结果" else "这里还没有内容，下拉刷新试试",
+                        when {
+                            search.isNotBlank() || selectedTags.isNotEmpty() -> "没有匹配的结果"
+                            filter == Filter.Favorites -> "还没有收藏。长按缩略图或在播放页点 ♡ 收藏"
+                            else -> "这里还没有内容，下拉刷新试试"
+                        },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp),
                     )
                 }
             }
@@ -383,7 +407,7 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
         PermanentNavigationDrawer(
             drawerContent = {
                 PermanentDrawerSheet(Modifier.width(SIDEBAR_WIDTH.dp)) {
-                    DrawerContent(vm) { vm.filter.value = it }
+                    DrawerContent(vm, showDone = false, onSelect = { vm.filter.value = it }, onDone = {})
                 }
             },
         ) { body() }
@@ -392,10 +416,15 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
             drawerState = drawerState,
             drawerContent = {
                 ModalDrawerSheet {
-                    DrawerContent(vm) { f ->
-                        vm.filter.value = f
-                        scope.launch { drawerState.close() }
-                    }
+                    DrawerContent(
+                        vm,
+                        showDone = true,
+                        onSelect = { f ->
+                            vm.filter.value = f
+                            scope.launch { drawerState.close() }
+                        },
+                        onDone = { scope.launch { drawerState.close() } },
+                    )
                 }
             },
         ) { body() }
@@ -449,10 +478,18 @@ private fun ThumbSizeSlider(widthDp: Float, columns: Int, onChange: (Float) -> U
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ThumbCell(item: ItemEntity, thumbUrl: String, showName: Boolean, onClick: () -> Unit) {
+private fun ThumbCell(
+    item: ItemEntity,
+    thumbUrl: String,
+    showName: Boolean,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val context = LocalContext.current
-    Column(Modifier.clickable(onClick = onClick)) {
+    Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Box(
             Modifier
                 .fillMaxWidth()
@@ -472,6 +509,19 @@ private fun ThumbCell(item: ItemEntity, thumbUrl: String, showName: Boolean, onC
                     item.ext.uppercase(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
+                )
+            }
+            if (favorite) {
+                Icon(
+                    Icons.Default.Favorite,
+                    contentDescription = "已收藏",
+                    tint = FAVORITE_RED,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .background(Color(0x66000000), CircleShape)
+                        .padding(3.dp)
+                        .size(14.dp),
                 )
             }
             if (item.isVideo && item.duration > 0) {
@@ -500,8 +550,11 @@ private fun ThumbCell(item: ItemEntity, thumbUrl: String, showName: Boolean, onC
     }
 }
 
+val FAVORITE_RED = Color(0xFFFF5470)
+
 private fun filterTitle(f: Filter) = when (f) {
     Filter.All -> "全部"
+    Filter.Favorites -> "收藏"
     Filter.Uncategorized -> "未分类"
     Filter.Trash -> "回收站"
     is Filter.Folder -> f.name
@@ -516,91 +569,223 @@ private fun flatten(list: List<FolderDto>, expanded: Set<String>, depth: Int, ou
     }
 }
 
+/**
+ * Sidebar: 全部 / 收藏 pick the scope; tags below narrow it down (multi-select, same group = any,
+ * different groups = all). Tapping tags keeps the drawer open; the bottom button closes it.
+ */
 @Composable
-private fun DrawerContent(vm: MainViewModel, onSelect: (Filter) -> Unit) {
+private fun DrawerContent(vm: MainViewModel, showDone: Boolean, onSelect: (Filter) -> Unit, onDone: () -> Unit) {
     val filter by vm.filter.collectAsStateWithLifecycle()
-    val folders by vm.folders.collectAsStateWithLifecycle()
-    val counts by vm.folderCounts.collectAsStateWithLifecycle()
     val totals by vm.totals.collectAsStateWithLifecycle()
+    val groups by vm.tagGroups.collectAsStateWithLifecycle()
+    val selected by vm.selectedTags.collectAsStateWithLifecycle()
+    val items by vm.items.collectAsStateWithLifecycle()
     val libraryName by vm.libraryName.collectAsStateWithLifecycle()
-    var expanded by rememberSaveable { mutableStateOf(setOf<String>()) }
-    val rows = remember(folders, expanded) {
-        mutableListOf<FolderRow>().also { flatten(folders, expanded, 0, it) }
+    val showFolders by vm.showFolders.collectAsStateWithLifecycle()
+    val folders by vm.folders.collectAsStateWithLifecycle()
+    val folderCounts by vm.folderCounts.collectAsStateWithLifecycle()
+    var query by rememberSaveable { mutableStateOf("") }
+    var expandedGroups by rememberSaveable { mutableStateOf(setOf<String>()) }
+    var expandedFolders by rememberSaveable { mutableStateOf(setOf<String>()) }
+
+    val q = query.trim()
+    val visibleGroups = remember(groups, q) {
+        if (q.isEmpty()) groups
+        else groups.mapNotNull { g ->
+            val hit = if (g.name.contains(q, true)) g.tags else g.tags.filter { it.tag.contains(q, true) }
+            if (hit.isEmpty()) null else g.copy(tags = hit)
+        }
+    }
+    val folderRows = remember(folders, expandedFolders, showFolders) {
+        if (!showFolders) emptyList() else mutableListOf<FolderRow>().also { flatten(folders, expandedFolders, 0, it) }
     }
 
-    LazyColumn(contentPadding = PaddingValues(vertical = 12.dp)) {
-        item {
-            Text(
-                libraryName.ifEmpty { "Eagle" },
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
-            )
-        }
-        item {
-            DrawerEntry("全部", totals.all, Icons.Default.PhotoLibrary, filter == Filter.All) {
-                onSelect(Filter.All)
+    Column(Modifier.fillMaxHeight()) {
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(vertical = 12.dp)) {
+            item {
+                Text(
+                    libraryName.ifEmpty { "入到云盘" },
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(start = 28.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("搜索标签") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "清空") }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            item {
+                DrawerEntry("全部", totals.all, Icons.Default.PhotoLibrary, filter == Filter.All) { onSelect(Filter.All) }
+            }
+            item {
+                DrawerEntry("收藏", totals.favorites, Icons.Default.Favorite, filter == Filter.Favorites) {
+                    onSelect(Filter.Favorites)
+                }
+            }
+            item {
+                HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 28.dp, end = 12.dp),
+                ) {
+                    Text(
+                        "标签",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (selected.isNotEmpty()) {
+                        TextButton(onClick = { vm.selectedTags.value = emptySet() }) { Text("清除 (${selected.size})") }
+                    }
+                }
+            }
+            visibleGroups.forEach { group ->
+                val open = q.isNotEmpty() || group.name in expandedGroups
+                val picked = group.tags.count { it.tag in selected }
+                item(key = "g:" + group.name) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .clickable {
+                                expandedGroups = if (group.name in expandedGroups) expandedGroups - group.name
+                                else expandedGroups + group.name
+                            }
+                            .padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+                    ) {
+                        Icon(
+                            if (open) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(group.name, modifier = Modifier.padding(start = 8.dp).weight(1f))
+                        if (picked > 0) {
+                            Text(
+                                "已选 $picked",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                        }
+                        Text(
+                            "${group.tags.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (open) {
+                    items(group.tags, key = { "t:" + it.tag }) { tc ->
+                        val on = tc.tag in selected
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(if (on) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                                .clickable { vm.toggleTag(tc.tag) }
+                                .padding(start = 28.dp, end = 16.dp),
+                        ) {
+                            Checkbox(checked = on, onCheckedChange = null, modifier = Modifier.size(40.dp))
+                            Text(
+                                tagValueOf(tc.tag),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                "${tc.n}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            if (showFolders) {
+                item {
+                    HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
+                    Text(
+                        "Eagle 文件夹",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp),
+                    )
+                }
+                item {
+                    DrawerEntry("未分类", totals.uncategorized, Icons.Default.FolderOff, filter == Filter.Uncategorized) {
+                        onSelect(Filter.Uncategorized)
+                    }
+                }
+                item {
+                    DrawerEntry("回收站", totals.trash, Icons.Default.Delete, filter == Filter.Trash) { onSelect(Filter.Trash) }
+                }
+                items(folderRows, key = { "f:" + it.folder.id }) { row ->
+                    val f = row.folder
+                    val isSel = (filter as? Filter.Folder)?.id == f.id
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(if (isSel) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                            .clickable { onSelect(Filter.Folder(f.id, f.name)) }
+                            .padding(start = (8 + row.depth * 16).dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+                    ) {
+                        if (f.children.isNotEmpty()) {
+                            Icon(
+                                if (f.id in expandedFolders) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                                contentDescription = "展开",
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        expandedFolders = if (f.id in expandedFolders) expandedFolders - f.id
+                                        else expandedFolders + f.id
+                                    },
+                            )
+                        } else {
+                            Spacer(Modifier.width(24.dp))
+                        }
+                        Icon(
+                            if (f.locked) Icons.Default.Lock else Icons.Default.Folder,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .padding(horizontal = 8.dp)
+                                .size(20.dp),
+                        )
+                        Text(f.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text(
+                            "${folderCounts[f.id] ?: 0}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
-        item {
-            DrawerEntry("未分类", totals.uncategorized, Icons.Default.FolderOff, filter == Filter.Uncategorized) {
-                onSelect(Filter.Uncategorized)
-            }
-        }
-        item {
-            DrawerEntry("回收站", totals.trash, Icons.Default.Delete, filter == Filter.Trash) {
-                onSelect(Filter.Trash)
-            }
-        }
-        item {
-            HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
-            Text(
-                "文件夹",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp),
-            )
-        }
-        items(rows, key = { it.folder.id }) { row ->
-            val f = row.folder
-            val selected = (filter as? Filter.Folder)?.id == f.id
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+        if (showDone) {
+            Button(
+                onClick = onDone,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                    .clickable { onSelect(Filter.Folder(f.id, f.name)) }
-                    .padding(start = (8 + row.depth * 16).dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
-            ) {
-                if (f.children.isNotEmpty()) {
-                    Icon(
-                        if (f.id in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
-                        contentDescription = "展开",
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable {
-                                expanded = if (f.id in expanded) expanded - f.id else expanded + f.id
-                            },
-                    )
-                } else {
-                    Spacer(Modifier.width(24.dp))
-                }
-                Icon(
-                    if (f.locked) Icons.Default.Lock else Icons.Default.Folder,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .padding(horizontal = 8.dp)
-                        .size(20.dp),
-                )
-                Text(f.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text(
-                    "${counts[f.id] ?: 0}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) { Text("查看 ${items.size} 项") }
         }
     }
 }
@@ -609,7 +794,7 @@ private fun DrawerContent(vm: MainViewModel, onSelect: (Filter) -> Unit) {
 private fun DrawerEntry(
     label: String,
     count: Int,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     selected: Boolean,
     onClick: () -> Unit,
 ) {

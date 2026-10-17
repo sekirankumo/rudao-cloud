@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
                 val configured by vm.configured.collectAsStateWithLifecycle()
                 var showSetup by rememberSaveable { mutableStateOf(false) }
                 var viewerIndex by rememberSaveable { mutableIntStateOf(-1) }
+                var previewing by rememberSaveable { mutableStateOf(false) }
 
                 if (!configured || showSetup) {
                     SetupScreen(
@@ -46,7 +47,20 @@ class MainActivity : ComponentActivity() {
                         vm = vm,
                         onOpen = { viewerIndex = it },
                         onSettings = { showSetup = true },
+                        onPreview = { previewing = true },
                     )
+                    if (previewing) {
+                        PreviewScreen(
+                            vm = vm,
+                            onClose = { previewing = false },
+                            onWatchFull = { item, positionMs ->
+                                // open the normal player on that video, at the moment being previewed
+                                PlaybackMemory.positions[item.id] = positionMs
+                                previewing = false
+                                viewerIndex = vm.items.value.indexOfFirst { it.id == item.id }
+                            },
+                        )
+                    }
                     if (viewerIndex >= 0) {
                         ViewerScreen(
                             vm = vm,
