@@ -76,6 +76,9 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.eaglelan.app.EagleApp
 import com.eaglelan.app.data.ItemEntity
+import com.eaglelan.app.data.LoudMode
+import com.eaglelan.app.data.Loudness
+import com.eaglelan.app.data.LoudnessDto
 import com.eaglelan.app.data.isVideo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -83,7 +86,7 @@ import okhttp3.OkHttpClient
 import kotlin.random.Random
 
 /** One 随机速览 segment: a random window of [lengthMs] starting at [startMs]. */
-private data class Clip(val item: ItemEntity, val startMs: Long, val lengthMs: Long)
+private data class Clip(val item: ItemEntity, val startMs: Long, val lengthMs: Long, val loud: LoudnessDto? = null)
 
 /** Deals clips from the pool in shuffled order, reshuffling when it runs out. */
 private class ClipDeck(private val pool: List<ItemEntity>) {
@@ -124,6 +127,8 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
     val favorites by vm.favorites.collectAsStateWithLifecycle()
     val clipSec by vm.previewSeconds.collectAsStateWithLifecycle()
     val clipSecNow by rememberUpdatedState(clipSec)
+    val loudMode by vm.loudMode.collectAsStateWithLifecycle()
+    val loudModeNow by rememberUpdatedState(loudMode)
     BackHandler(onBack = onClose)
 
     // Pool = videos in the current list, so scope / tags / search all apply.
@@ -160,14 +165,23 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
     var buffering by remember { mutableStateOf(true) }
     var clipNo by remember { mutableIntStateOf(1) }
 
-    fun load(slot: Int) {
-        val clip = deck.next(clipSecNow * 1000L)
+    suspend fun load(slot: Int) {
+        val raw = deck.next(clipSecNow * 1000L)
+        // fetched while the other clip is playing, so the gain is ready when this one starts
+        val clip = raw.copy(loud = vm.loudness(raw.item.id))
         slots[slot] = clip
+        players[slot].volume = Loudness.volume(Loudness.gainDb(clip.loud, clip.startMs, clip.lengthMs, loudModeNow), loudModeNow)
         players[slot].apply {
             playWhenReady = false
             setMediaItem(MediaItem.fromUri(vm.fileUrl(clip.item)))
             prepare()
             seekTo(clip.startMs)
+        }
+    }
+
+    LaunchedEffect(loudMode) {
+        slots.forEachIndexed { i, c ->
+            if (c != null) players[i].volume = Loudness.volume(Loudness.gainDb(c.loud, c.startMs, c.lengthMs, loudMode), loudMode)
         }
     }
 
@@ -313,7 +327,9 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 Column(Modifier.weight(1f)) {
                     Text(clip.item.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "随机速览 · 第 $clipNo 段 · 从 ${formatMillis(clip.startMs)} 开始",
+                        "随机速览 · 第 $clipNo 段 · 从 ${formatMillis(clip.startMs)} 开始" +
+                            Loudness.label(Loudness.gainDb(clip.loud, clip.startMs, clip.lengthMs, loudMode), loudMode)
+                                .let { if (it.isEmpty()) "" else " · $it" },
                         color = Color(0xB3FFFFFF),
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -347,6 +363,12 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
+                    FilterChip(
+                        selected = loudMode != LoudMode.OFF,
+                        onClick = vm::cycleLoudMode,
+                        label = { Text(loudMode.label) },
+                        colors = FilterChipDefaults.filterChipColors(labelColor = Color.White),
+                    )
                     Text("每段", color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelMedium)
                     CLIP_LENGTHS.forEach { sec ->
                         FilterChip(

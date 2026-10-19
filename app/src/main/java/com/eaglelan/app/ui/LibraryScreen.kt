@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.FolderOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
@@ -137,6 +138,7 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
     val seed by vm.shuffleSeed.collectAsStateWithLifecycle()
     val favorites by vm.favorites.collectAsStateWithLifecycle()
     val showFolders by vm.showFolders.collectAsStateWithLifecycle()
+    val loudMode by vm.loudMode.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -281,6 +283,11 @@ fun LibraryScreen(vm: MainViewModel, onOpen: (Int) -> Unit, onSettings: () -> Un
                                 HorizontalDivider()
                                 ThumbSizeSlider(thumbWidth, gridColumns) { vm.setThumbWidth(it) }
                                 HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(loudMode.label) },
+                                    leadingIcon = { Icon(Icons.Default.GraphicEq, null) },
+                                    onClick = { vm.cycleLoudMode() },
+                                )
                                 DropdownMenuItem(
                                     text = { Text("显示 Eagle 文件夹") },
                                     leadingIcon = { Checkbox(checked = showFolders, onCheckedChange = null) },

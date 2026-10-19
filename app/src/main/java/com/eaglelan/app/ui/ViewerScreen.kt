@@ -88,6 +88,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.eaglelan.app.EagleApp
 import com.eaglelan.app.data.ItemEntity
+import com.eaglelan.app.data.Loudness
 import com.eaglelan.app.data.isImage
 import com.eaglelan.app.data.isVideo
 import com.eaglelan.app.data.tagList
@@ -147,6 +148,7 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
             val item = items[page]
             when {
                 item.isVideo -> VideoPage(
+                    vm = vm,
                     item = item,
                     url = vm.fileUrl(item),
                     thumbUrl = vm.thumbUrl(item),
@@ -260,6 +262,7 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
 @OptIn(UnstableApi::class)
 @Composable
 private fun VideoPage(
+    vm: MainViewModel,
     item: ItemEntity,
     url: String,
     thumbUrl: String,
@@ -274,7 +277,7 @@ private fun VideoPage(
             AsyncImage(thumbUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         }
         if (active) {
-            ActiveVideo(item, url, chrome, onToggleChrome, onInteract)
+            ActiveVideo(vm, item, url, chrome, onToggleChrome, onInteract)
         } else {
             Box(
                 Modifier
@@ -288,6 +291,7 @@ private fun VideoPage(
 @OptIn(UnstableApi::class)
 @Composable
 private fun ActiveVideo(
+    vm: MainViewModel,
     item: ItemEntity,
     url: String,
     chrome: Boolean,
@@ -314,6 +318,12 @@ private fun ActiveVideo(
                 PlaybackMemory.positions[item.id] = player.currentPosition
                 player.release()
             }
+        }
+        // Loudness: one fixed gain for the whole video (its own dynamics stay intact).
+        val loudMode by vm.loudMode.collectAsStateWithLifecycle()
+        LaunchedEffect(player, loudMode) {
+            val gain = Loudness.gainDb(vm.loudness(item.id), null, 0, loudMode)
+            player.volume = Loudness.volume(gain, loudMode)
         }
 
         var position by remember { mutableLongStateOf(0L) }

@@ -76,6 +76,10 @@ class Prefs(context: Context) {
         get() = sp.getInt("previewSeconds", 10)
         set(v) = sp.edit().putInt("previewSeconds", v).apply()
 
+    var loudMode: String?
+        get() = sp.getString("loudMode", null)
+        set(v) = sp.edit().putString("loudMode", v).apply()
+
     val isConfigured get() = baseUrl.isNotEmpty() && token.isNotEmpty()
 }
 
@@ -89,6 +93,18 @@ class Repository(
     private fun api() = Api(http, prefs.baseUrl, prefs.token)
 
     suspend fun ping(): PingDto = api().ping()
+
+    // Analysed videos don't change, so keep recent answers; misses are re-asked (analysis may finish later).
+    private val loudCache = object : LinkedHashMap<String, LoudnessDto>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, LoudnessDto>?) = size > 500
+    }
+
+    suspend fun loudness(id: String): LoudnessDto? {
+        synchronized(loudCache) { loudCache[id] }?.let { return it }
+        val d = try { api().loudness(id) } catch (e: Exception) { null } ?: return null
+        synchronized(loudCache) { loudCache[id] = d }
+        return d
+    }
 
     fun thumbUrl(id: String) = api().thumbUrl(id)
     fun fileUrl(id: String) = api().fileUrl(id)

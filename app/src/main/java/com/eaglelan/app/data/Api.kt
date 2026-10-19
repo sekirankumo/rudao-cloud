@@ -63,6 +63,18 @@ class Api(private val client: OkHttpClient, val baseUrl: String, private val tok
 
     suspend fun sync(since: Long): SyncDto = get("/api/sync?since=$since")
 
+    /** Loudness of a video, or null if the computer hasn't analysed it yet (404). */
+    suspend fun loudness(id: String): LoudnessDto? = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$baseUrl/api/loudness/$id").header("X-Token", token).build()
+        client.newCall(request).execute().use { resp ->
+            when {
+                resp.code == 404 -> null
+                !resp.isSuccessful -> throw ApiException("服务器返回 HTTP ${resp.code}")
+                else -> AppJson.decodeFromString(LoudnessDto.serializer(), resp.body!!.string())
+            }
+        }
+    }
+
     fun thumbUrl(id: String) = "$baseUrl/api/thumb/$id?token=$tokenParam"
 
     fun fileUrl(id: String) = "$baseUrl/api/file/$id?token=$tokenParam"

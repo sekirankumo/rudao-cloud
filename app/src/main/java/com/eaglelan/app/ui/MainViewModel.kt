@@ -107,6 +107,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     val showFolders = MutableStateFlow(prefs.showFolders)
+    val loudMode = MutableStateFlow(com.eaglelan.app.data.LoudMode.from(prefs.loudMode))
     val previewSeconds = MutableStateFlow(prefs.previewSeconds)
 
     val serverUrl get() = prefs.baseUrl
@@ -251,6 +252,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // leaving a folder view that is no longer reachable from the sidebar
         if (!show && filter.value !in listOf(Filter.All, Filter.Favorites)) filter.value = Filter.All
     }
+
+    fun cycleLoudMode() {
+        loudMode.value = loudMode.value.next()
+        prefs.loudMode = loudMode.value.name
+        message.value = when (loudMode.value) {
+            com.eaglelan.app.data.LoudMode.STANDARD -> "响度统一：标准（太响的压低，太轻的最多拉高 8 dB；整体会轻一些）"
+            com.eaglelan.app.data.LoudMode.DOWN -> "响度统一：只压低太响的，安静的保持原样"
+            com.eaglelan.app.data.LoudMode.OFF -> "响度统一已关闭"
+        }
+    }
+
+    suspend fun loudness(id: String) = repo.loudness(id)
 
     fun setPreviewSeconds(sec: Int) {
         previewSeconds.value = sec
