@@ -94,11 +94,16 @@ class Api(private val client: OkHttpClient, val baseUrl: String, private val tok
         const val DEFAULT_PORT = 41600
 
         /** "192.168.1.100" -> "http://192.168.1.100:41600" */
+        /**
+         * "192.168.1.100" -> "http://192.168.1.100:41600" (the phone server's default port).
+         * A https:// address keeps its implicit 443, e.g. "https://media.example.com" stays as is.
+         */
         fun normalizeBaseUrl(input: String): String {
             var s = input.trim().trimEnd('/')
             if (!s.contains("://")) s = "http://$s"
+            val scheme = s.substringBefore("://").lowercase()
             val hostPart = s.substringAfter("://").substringBefore('/')
-            if (!hostPart.contains(':')) {
+            if (!hostPart.contains(':') && scheme != "https") {
                 s = s.replaceFirst(hostPart, "$hostPart:$DEFAULT_PORT")
             }
             return s
