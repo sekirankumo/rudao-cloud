@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -44,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -82,6 +84,7 @@ import com.eaglelan.app.data.LoudnessDto
 import com.eaglelan.app.data.isVideo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import kotlin.random.Random
 
@@ -156,27 +159,41 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
     DisposableEffect(Unit) { onDispose { players.forEach { it.release() } } }
     val deck = remember { ClipDeck(pool) }
     val slots = remember { mutableStateListOf<Clip?>(null, null) }
+    val scope = rememberCoroutineScope()
 
     var cur by remember { mutableIntStateOf(0) }
     var paused by remember { mutableStateOf(false) }
     var chrome by remember { mutableStateOf(true) }
-    var skipRequests by remember { mutableIntStateOf(0) }
     var progress by remember { mutableFloatStateOf(0f) }
     var buffering by remember { mutableStateOf(true) }
     var clipNo by remember { mutableIntStateOf(1) }
 
-    suspend fun load(slot: Int) {
-        val raw = deck.next(clipSecNow * 1000L)
-        // fetched while the other clip is playing, so the gain is ready when this one starts
-        val clip = raw.copy(loud = vm.loudness(raw.item.id))
+    // Clips are appended to `history` as they are needed, so 上一段 can step back through them.
+    val history = remember { mutableStateListOf<Clip>() }
+    val slotIndex = remember { intArrayOf(-1, -1) }   // which history index each player holds
+    val slotGen = remember { intArrayOf(0, 0) }       // invalidates a superseded prepare
+    var pos by remember { mutableIntStateOf(0) }
+    var pendingNav by remember { mutableIntStateOf(0) }   // +1 下一段, -1 上一段
+
+    fun newClip(): Clip = deck.next(clipSecNow * 1000L)
+
+    /** Load history[index] into a player. Loudness is fetched here, before the clip is needed. */
+    suspend fun prepareInto(slot: Int, index: Int) {
+        if (slotIndex[slot] == index) return
+        val gen = ++slotGen[slot]
+        val base = history.getOrNull(index) ?: return
+        val loud = vm.loudness(base.item.id)
+        if (slotGen[slot] != gen) return            // superseded by a newer prepare
+        val clip = base.copy(loud = loud)
+        history[index] = clip
         slots[slot] = clip
-        players[slot].volume = Loudness.volume(Loudness.gainDb(clip.loud, clip.startMs, clip.lengthMs, loudModeNow), loudModeNow)
-        players[slot].apply {
-            playWhenReady = false
-            setMediaItem(MediaItem.fromUri(vm.fileUrl(clip.item)))
-            prepare()
-            seekTo(clip.startMs)
-        }
+        val p = players[slot]
+        p.volume = Loudness.volume(Loudness.gainDb(clip.loud, clip.startMs, clip.lengthMs, loudModeNow), loudModeNow)
+        p.playWhenReady = false
+        p.setMediaItem(MediaItem.fromUri(vm.fileUrl(clip.item)))
+        p.prepare()
+        p.seekTo(clip.startMs)
+        slotIndex[slot] = index
     }
 
     LaunchedEffect(loudMode) {
@@ -186,15 +203,31 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
     }
 
     LaunchedEffect(Unit) {
-        load(0)
-        load(1)
+        history.add(newClip())
+        prepareInto(0, 0)
+        cur = 0
+        history.add(newClip())          // preloaded on the spare player while the first clip plays
+        prepareInto(1, 1)
+
         var failures = 0
         while (isActive) {
+            val index = pos
+            val clip = history.getOrNull(index) ?: break
+            if (slotIndex[cur] != index) {       // came back to a clip the other player may already hold
+                val other = 1 - cur
+                if (slotIndex[other] != index) prepareInto(other, index)
+                cur = other
+            }
             val p = players[cur]
-            val clip = slots[cur] ?: break
-            val skipAtStart = skipRequests
+            // Prepare the following clip on the idle player while this one plays, so 下一段 is instant.
+            if (history.size <= index + 1) history.add(newClip())
+            val spare = 1 - cur
+            if (slotIndex[spare] != index + 1) scope.launch { prepareInto(spare, index + 1) }
+            p.seekTo(clip.startMs)
+            progress = 0f
             var startPos = -1L
             var failed = false
+            p.playWhenReady = !paused
             while (isActive) {
                 p.playWhenReady = !paused
                 buffering = p.playbackState == Player.STATE_BUFFERING
@@ -202,7 +235,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                     failed = true
                     break
                 }
-                if (skipRequests != skipAtStart || p.playbackState == Player.STATE_ENDED) break
+                if (pendingNav != 0 || p.playbackState == Player.STATE_ENDED) break
                 // count from where playback really started (keyframe seeks land a little early)
                 if (p.isPlaying && startPos < 0) startPos = p.currentPosition
                 if (startPos >= 0) {
@@ -213,17 +246,24 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 delay(100)
             }
             p.playWhenReady = false
+
             failures = if (failed) failures + 1 else 0
             if (failures >= 5) {
                 vm.message.value = "连续多个视频无法播放，请检查连接"
                 onClose()
                 break
             }
-            val finished = cur
-            cur = 1 - cur
-            clipNo++
-            progress = 0f
-            load(finished)      // the player that just finished prepares the clip after next
+
+            val nav = pendingNav
+            pendingNav = 0
+            val target = if (nav != 0) pos + nav else pos + 1
+            if (target < 0) {
+                vm.message.value = "已经是第一段"
+                continue                        // replay the current clip from its start
+            }
+            pos = target
+            while (history.size <= pos) history.add(newClip())
+            clipNo = pos + 1
             if (failed) delay(300)
         }
     }
@@ -252,7 +292,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Gestures: tap = overlay, double-tap = pause, swipe up = next clip.
+        // Gestures: tap = overlay, double-tap = pause, swipe up = next clip, swipe down = previous.
         Box(
             Modifier
                 .fillMaxSize()
@@ -270,7 +310,11 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                             change.consume()
                             dy += d
                         },
-                        onDragEnd = { if (dy < -80.dp.toPx()) skipRequests++ },
+                        onDragEnd = {
+                            val threshold = 80.dp.toPx()
+                            if (dy < -threshold) pendingNav = 1
+                            else if (dy > threshold) pendingNav = -1
+                        },
                     )
                 },
         )
@@ -327,9 +371,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 Column(Modifier.weight(1f)) {
                     Text(clip.item.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
-                        "随机速览 · 第 $clipNo 段 · 从 ${formatMillis(clip.startMs)} 开始" +
-                            Loudness.label(Loudness.gainDb(clip.loud, clip.startMs, clip.lengthMs, loudMode), loudMode)
-                                .let { if (it.isEmpty()) "" else " · $it" },
+                        "随机速览 · 第 $clipNo 段 · 从 ${formatMillis(clip.startMs)} 开始",
                         color = Color(0xB3FFFFFF),
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -363,12 +405,6 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
-                    FilterChip(
-                        selected = loudMode != LoudMode.OFF,
-                        onClick = vm::cycleLoudMode,
-                        label = { Text(loudMode.label) },
-                        colors = FilterChipDefaults.filterChipColors(labelColor = Color.White),
-                    )
                     Text("每段", color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelMedium)
                     CLIP_LENGTHS.forEach { sec ->
                         FilterChip(
@@ -380,6 +416,9 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { pendingNav = -1 }) {
+                        Icon(Icons.Default.SkipPrevious, "上一段", tint = Color.White)
+                    }
                     IconButton(onClick = { paused = !paused }) {
                         Icon(
                             if (paused) Icons.Default.PlayArrow else Icons.Default.Pause,
@@ -387,11 +426,11 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                             tint = Color.White,
                         )
                     }
-                    IconButton(onClick = { skipRequests++ }) {
+                    IconButton(onClick = { pendingNav = 1 }) {
                         Icon(Icons.Default.SkipNext, "下一段", tint = Color.White)
                     }
                     Text(
-                        "上滑也可以切到下一段",
+                        "上滑下一段 / 下滑上一段",
                         color = Color(0x99FFFFFF),
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.weight(1f),
