@@ -1,6 +1,5 @@
 package com.eaglelan.app.ui
 
-import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.key.Key
@@ -8,8 +7,18 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 
+actual val isDesktop = true
+
 @Composable
-actual fun platformColorScheme(): ColorScheme? = null
+actual fun LandscapeLock(enabled: Boolean) {
+}
+
+/** Set by the window (desktopApp) so shared screens can toggle full screen. */
+object DesktopWindow {
+    var toggleFullscreen: () -> Unit = {}
+}
+
+actual fun toggleFullscreen() = DesktopWindow.toggleFullscreen()
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable

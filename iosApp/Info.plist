@@ -35,11 +35,9 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于连接电脑上的 Eagle 素材库服务。</string>
-	<!-- The app is always dark; the viewer hides the status bar itself -->
+	<!-- The app is always dark; HostViewController (iOSApp.swift) shows / hides the status bar -->
 	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<false/>
-	<key>UIStatusBarStyle</key>
-	<string>UIStatusBarStyleLightContent</string>
+	<true/>
 	<key>UIUserInterfaceStyle</key>
 	<string>Dark</string>
 	<key>UILaunchScreen</key>

@@ -79,6 +79,10 @@ data class ItemTag(val itemId: String, val tag: String)
 @Entity(tableName = "favorites")
 data class Favorite(@PrimaryKey val itemId: String, val addedAt: Long)
 
+/** Where each video was left off (phone-local, like favourites); drives 继续观看. */
+@Entity(tableName = "playback")
+data class Playback(@PrimaryKey val itemId: String, val positionMs: Long, val durationMs: Long, val updatedAt: Long)
+
 data class FolderCount(val folderId: String, val n: Int)
 
 data class TagCount(val tag: String, val n: Int)
@@ -91,7 +95,7 @@ fun tagValueOf(tag: String) = if (':' in tag) tag.substringAfter(':').trim() els
 
 @Dao
 interface ItemDao {
-    @RawQuery(observedEntities = [ItemEntity::class, ItemFolder::class, ItemTag::class, Favorite::class])
+    @RawQuery(observedEntities = [ItemEntity::class, ItemFolder::class, ItemTag::class, Favorite::class, Playback::class])
     fun observe(query: RoomRawQuery): Flow<List<ItemEntity>>
 
     @Upsert
@@ -162,11 +166,26 @@ interface ItemDao {
 
     @Query("SELECT COUNT(*) FROM items WHERE isDeleted = 1")
     fun countTrash(): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun savePlayback(p: Playback)
+
+    @Query("DELETE FROM playback WHERE itemId = :id")
+    suspend fun clearPlayback(id: String)
+
+    @Query("SELECT * FROM playback WHERE itemId = :id")
+    suspend fun playback(id: String): Playback?
+
+    @Query("SELECT * FROM playback")
+    fun playbacks(): Flow<List<Playback>>
+
+    @Query("SELECT COUNT(*) FROM playback p JOIN items i ON i.id = p.itemId WHERE i.isDeleted = 0")
+    fun countContinue(): Flow<Int>
 }
 
 @Database(
-    entities = [ItemEntity::class, ItemFolder::class, ItemTag::class, Favorite::class],
-    version = 3,
+    entities = [ItemEntity::class, ItemFolder::class, ItemTag::class, Favorite::class, Playback::class],
+    version = 4,
     exportSchema = false,
 )
 @ConstructedBy(AppDatabaseConstructor::class)
@@ -179,7 +198,7 @@ abstract class AppDatabase : RoomDatabase() {
             builder
                 // Favourites can't be re-synced from the computer, so every schema change from here on
                 // needs a real migration. The destructive fallback only covers the pre-favourites v1.
-                .addMigrations(MIGRATION_2_3)
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                 .fallbackToDestructiveMigrationFrom(true, 1)
                 .setDriver(BundledSQLiteDriver())
                 .setQueryCoroutineContext(ioContext)
@@ -190,6 +209,15 @@ abstract class AppDatabase : RoomDatabase() {
                 connection.execSQL(
                     "CREATE TABLE IF NOT EXISTS `favorites` (`itemId` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, " +
                         "PRIMARY KEY(`itemId`))"
+                )
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `playback` (`itemId` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, " +
+                        "`durationMs` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`itemId`))"
                 )
             }
         }

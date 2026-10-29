@@ -27,7 +27,16 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
-data class Totals(val all: Int = 0, val uncategorized: Int = 0, val trash: Int = 0, val favorites: Int = 0)
+data class Totals(
+    val all: Int = 0,
+    val uncategorized: Int = 0,
+    val trash: Int = 0,
+    val favorites: Int = 0,
+    val continued: Int = 0,
+)
+
+/** A long-press favourite change, shown as a snackbar with 撤销. [seq] makes repeats distinct. */
+data class FavToast(val id: String, val added: Boolean, val seq: Long)
 
 data class TagGroup(val name: String, val total: Int, val tags: List<TagCount>)
 
@@ -99,9 +108,23 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     val totals: StateFlow<Totals> =
-        combine(repo.dao.countAll(), repo.dao.countUncategorized(), repo.dao.countTrash(), repo.dao.countFavorites()) { a, u, t, f ->
-            Totals(a, u, t, f)
+        combine(
+            repo.dao.countAll(), repo.dao.countUncategorized(), repo.dao.countTrash(),
+            repo.dao.countFavorites(), repo.dao.countContinue(),
+        ) { a, u, t, f, c ->
+            Totals(a, u, t, f, c)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, Totals())
+
+    /** How far each part-watched video got (0..1), for the line under its thumbnail. */
+    val progress: StateFlow<Map<String, Float>> =
+        repo.dao.playbacks()
+            .map { list -> list.associate { it.itemId to (it.positionMs.toFloat() / it.durationMs).coerceIn(0f, 1f) } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    val favToast = MutableStateFlow<FavToast?>(null)
+
+    /** Item the library grid should bring into view (set when the viewer closes). */
+    val locate = MutableStateFlow<String?>(null)
 
     /** Phone-local favourites (item ids). */
     val favorites: StateFlow<Set<String>> =
@@ -256,11 +279,34 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
         return add
     }
 
+    /** Long press on a thumbnail: toggle, then offer 撤销. */
+    fun longPressFavorite(id: String) {
+        val added = toggleFavorite(id)
+        favToast.value = FavToast(id, added, nowMs())
+    }
+
+    fun undoFavorite(t: FavToast) {
+        viewModelScope.launch {
+            if (t.added) repo.dao.removeFavorite(t.id) else repo.dao.addFavorite(Favorite(t.id, nowMs()))
+        }
+    }
+
+    fun savePosition(id: String, positionMs: Long, durationMs: Long) {
+        viewModelScope.launch { repo.savePosition(id, positionMs, durationMs, nowMs()) }
+    }
+
+    suspend fun position(id: String): Long? = repo.position(id)
+
     fun setShowFolders(show: Boolean) {
         showFolders.value = show
         prefs.showFolders = show
         // leaving a folder view that is no longer reachable from the sidebar
-        if (!show && filter.value !in listOf(Filter.All, Filter.Favorites)) filter.value = Filter.All
+        if (!show && filter.value !in listOf(Filter.All, Filter.Favorites, Filter.Continue)) filter.value = Filter.All
+    }
+
+    fun setLoudMode(mode: LoudMode) {
+        loudMode.value = mode
+        prefs.loudMode = mode.name
     }
 
     fun cycleLoudMode() {

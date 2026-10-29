@@ -1,6 +1,5 @@
 package com.eaglelan.app.ui
 
-import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -14,9 +13,15 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalTime::class)
 fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
 
-/** Android 12+ wallpaper colours; null elsewhere (the fixed dark scheme is used). */
+/** Windows: mouse-and-keyboard controls (上一个 / 下一个 and full-screen buttons) instead of touch-only ones. */
+expect val isDesktop: Boolean
+
+/** Turns the phone to landscape while [enabled] (the player's rotate button); back to portrait after. */
 @Composable
-expect fun platformColorScheme(): ColorScheme?
+expect fun LandscapeLock(enabled: Boolean)
+
+/** Windows: full screen on / off (also F11). Elsewhere a no-op. */
+expect fun toggleFullscreen()
 
 /** Window width in dp, as Android's Configuration.screenWidthDp. */
 @Composable

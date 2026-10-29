@@ -15,6 +15,7 @@ import com.eaglelan.app.createDesktopServices
 import com.eaglelan.app.shutdownDesktopServices
 import com.eaglelan.app.ui.App
 import com.eaglelan.app.ui.AppKeys
+import com.eaglelan.app.ui.DesktopWindow
 import java.awt.Dimension
 
 fun main() {
@@ -24,6 +25,10 @@ fun main() {
     )
     application {
         val state = rememberWindowState(width = 1280.dp, height = 820.dp)
+        DesktopWindow.toggleFullscreen = {
+            state.placement =
+                if (state.placement == WindowPlacement.Fullscreen) WindowPlacement.Floating else WindowPlacement.Fullscreen
+        }
         Window(
             onCloseRequest = {
                 shutdownDesktopServices()
@@ -34,9 +39,7 @@ fun main() {
             icon = icon,
             onPreviewKeyEvent = { e ->
                 if (e.type == KeyEventType.KeyDown && e.key == Key.F11) {
-                    state.placement =
-                        if (state.placement == WindowPlacement.Fullscreen) WindowPlacement.Floating
-                        else WindowPlacement.Fullscreen
+                    DesktopWindow.toggleFullscreen()
                     true
                 } else {
                     AppKeys.dispatch(e)

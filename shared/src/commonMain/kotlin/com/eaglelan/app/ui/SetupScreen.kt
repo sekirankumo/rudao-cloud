@@ -57,7 +57,7 @@ fun SetupScreen(vm: MainViewModel, canCancel: Boolean, onDone: () -> Unit) {
                 Icon(
                     painterResource(Res.drawable.ic_cloud),
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = AppColors.Brand,
                     modifier = Modifier.size(40.dp),
                 )
                 Spacer(Modifier.size(12.dp))
@@ -87,6 +87,7 @@ fun SetupScreen(vm: MainViewModel, canCancel: Boolean, onDone: () -> Unit) {
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
+                    colors = brandButtonColors(),
                     enabled = !busy && host.isNotBlank() && token.isNotBlank(),
                     onClick = {
                         busy = true

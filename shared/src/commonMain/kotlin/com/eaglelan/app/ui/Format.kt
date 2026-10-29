@@ -13,6 +13,9 @@ fun formatDuration(seconds: Double): String {
 
 fun formatMillis(ms: Long) = formatDuration(ms / 1000.0)
 
+/** 4688 -> "4,688" */
+fun formatCount(n: Int): String = n.toString().reversed().chunked(3).joinToString(",").reversed()
+
 fun formatSize(bytes: Long): String {
     val units = arrayOf("B", "KB", "MB", "GB", "TB")
     var v = bytes.toDouble()

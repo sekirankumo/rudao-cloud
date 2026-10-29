@@ -1,15 +1,11 @@
 package com.eaglelan.app.ui
 
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,20 +21,27 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +58,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,9 +66,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -82,39 +89,50 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Remembers where each video was left off, for this app session. */
+/** A start position handed over by 随机速览's 看完整; takes priority over the saved one. */
 internal object PlaybackMemory {
     val positions = HashMap<String, Long>()
 }
 
+/**
+ * [onClose] gets the item on screen when closing (the grid scrolls to it and the close animation
+ * flies back to it), or null when there was nothing to show.
+ */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
-    val items by vm.items.collectAsStateWithLifecycle()
+fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: (ItemEntity?) -> Unit) {
+    // The list is fixed while viewing: a background sync must not shift what the swipes go through.
+    val items = remember { vm.items.value }
     val favorites by vm.favorites.collectAsStateWithLifecycle()
-    PlatformBackHandler(onBack = onClose)
     if (items.isEmpty()) {
-        LaunchedEffect(Unit) { onClose() }
+        LaunchedEffect(Unit) { onClose(null) }
         return
     }
 
     val pager = rememberPagerState(initialPage = startIndex.coerceIn(0, items.lastIndex)) { items.size }
     var chrome by remember { mutableStateOf(true) }
     var interaction by remember { mutableIntStateOf(0) }
+    var landscape by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val close = { onClose(items.getOrNull(pager.currentPage)) }
+    val goTo = { step: Int ->
+        val target = (pager.currentPage + step).coerceIn(0, items.lastIndex)
+        scope.launch { pager.animateScrollToPage(target) }
+        Unit
+    }
 
+    PlatformBackHandler(onBack = close)
     // Immersive: hide status/navigation bars while viewing.
     ImmersiveMode()
+    LandscapeLock(landscape)
 
     // Keyboard: ↑ / ↓ (or PageUp / PageDown) is the vertical swipe.
     KeyHandler { e ->
-        val step = when (e.key) {
-            Key.DirectionUp, Key.PageUp -> -1
-            Key.DirectionDown, Key.PageDown -> 1
+        when (e.key) {
+            Key.DirectionUp, Key.PageUp -> goTo(-1)
+            Key.DirectionDown, Key.PageDown -> goTo(1)
             else -> return@KeyHandler false
         }
-        val target = (pager.currentPage + step).coerceIn(0, items.lastIndex)
-        scope.launch { pager.animateScrollToPage(target) }
         true
     }
 
@@ -129,7 +147,23 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            // Mouse wheel: one notch = one item (the pager alone would scroll by pixels).
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    var last = 0L
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.type != PointerEventType.Scroll) continue
+                        val dy = event.changes.first().scrollDelta.y
+                        event.changes.forEach { it.consume() }
+                        val now = nowMs()
+                        if (dy == 0f || now - last < 350) continue
+                        last = now
+                        goTo(if (dy > 0) 1 else -1)
+                    }
+                }
+            },
     ) {
         // Vertical swipe changes item; horizontal drag on a video seeks.
         VerticalPager(
@@ -147,6 +181,11 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                     thumbUrl = vm.thumbUrl(item),
                     active = pager.settledPage == page,
                     chrome = chrome,
+                    hasPrev = page > 0,
+                    hasNext = page < items.lastIndex,
+                    onPrev = { goTo(-1) },
+                    onNext = { goTo(1) },
+                    onRotate = { landscape = !landscape },
                     onToggleChrome = { chrome = !chrome },
                     onInteract = { interaction++ },
                 )
@@ -164,7 +203,7 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                     }
                     Text(
                         "不支持预览 .${item.ext} 文件",
-                        color = Color.White,
+                        color = MediaColors.Text,
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
@@ -174,24 +213,30 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
         val current = items.getOrNull(pager.currentPage)
         AnimatedVisibility(
             visible = chrome && current != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(Motion.FADE, easing = Motion.Easing)),
+            exit = fadeOut(tween(Motion.FADE, easing = Motion.Easing)),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             if (current == null) return@AnimatedVisibility
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+                    .background(Brush.verticalGradient(listOf(MediaColors.ScrimStrong, Color.Transparent)))
                     .statusBarsPadding()
-                    .padding(bottom = 24.dp),
+                    .padding(top = 8.dp, bottom = 28.dp, start = 4.dp, end = 4.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
+                    IconButton(onClick = close) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = MediaColors.Text)
                     }
                     Column(Modifier.weight(1f)) {
-                        Text(current.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            current.name,
+                            color = MediaColors.Text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         Text(
                             buildString {
                                 append("${pager.currentPage + 1} / ${items.size}")
@@ -199,7 +244,7 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                                 append(" · ${formatSize(current.size)}")
                                 append(" · ${current.ext.uppercase()}")
                             },
-                            color = Color(0xB3FFFFFF),
+                            color = MediaColors.Text2,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -208,7 +253,7 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                         Icon(
                             if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = if (fav) "取消收藏" else "收藏",
-                            tint = if (fav) FAVORITE_RED else Color.White,
+                            tint = if (fav) AppColors.Favorite else MediaColors.Text,
                         )
                     }
                 }
@@ -217,22 +262,22 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
                     ) {
                         tags.forEach { tag ->
                             // Tapping a tag filters the library by it.
                             Text(
                                 tag,
-                                color = Color.White,
+                                color = MediaColors.Text,
                                 style = MaterialTheme.typography.labelSmall,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(Color(0x33FFFFFF))
+                                    .clip(AppShapes.Full)
+                                    .background(MediaColors.Chip)
                                     .clickable {
                                         vm.selectedTags.value = setOf(tag)
-                                        onClose()
+                                        onClose(null)
                                     }
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                    .padding(horizontal = 10.dp, vertical = 3.dp),
                             )
                         }
                     }
@@ -240,7 +285,7 @@ fun ViewerScreen(vm: MainViewModel, startIndex: Int, onClose: () -> Unit) {
                 if (current.annotation.isNotBlank()) {
                     Text(
                         current.annotation,
-                        color = Color(0xCCFFFFFF),
+                        color = MediaColors.Text2,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
@@ -260,6 +305,11 @@ private fun VideoPage(
     thumbUrl: String,
     active: Boolean,
     chrome: Boolean,
+    hasPrev: Boolean,
+    hasNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onRotate: () -> Unit,
     onToggleChrome: () -> Unit,
     onInteract: () -> Unit,
 ) {
@@ -269,7 +319,7 @@ private fun VideoPage(
             AsyncImage(thumbUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         }
         if (active) {
-            ActiveVideo(vm, item, url, thumbUrl, chrome, onToggleChrome, onInteract)
+            ActiveVideo(vm, item, url, thumbUrl, chrome, hasPrev, hasNext, onPrev, onNext, onRotate, onToggleChrome, onInteract)
         } else {
             Box(
                 Modifier
@@ -287,20 +337,25 @@ private fun ActiveVideo(
     url: String,
     thumbUrl: String,
     chrome: Boolean,
+    hasPrev: Boolean,
+    hasNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onRotate: () -> Unit,
     onToggleChrome: () -> Unit,
     onInteract: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
-        val player = remember(item.id) {
-            vm.newPlayer(PlayerKind.FULL).apply {
-                setUrl(url)
-                PlaybackMemory.positions[item.id]?.let { seekTo(it) }
-                playWhenReady = true
-            }
+        val player = remember(item.id) { vm.newPlayer(PlayerKind.FULL).apply { setUrl(url) } }
+        // Resume where it was left off (saved on the phone), then start.
+        LaunchedEffect(player) {
+            val start = PlaybackMemory.positions.remove(item.id) ?: vm.position(item.id)
+            start?.let { player.seekTo(it) }
+            player.playWhenReady = true
         }
         DisposableEffect(player) {
             onDispose {
-                PlaybackMemory.positions[item.id] = player.currentPosition
+                vm.savePosition(item.id, player.currentPosition, player.duration)
                 player.release()
             }
         }
@@ -344,18 +399,29 @@ private fun ActiveVideo(
             AsyncImage(thumbUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
         }
 
+        val togglePlay = {
+            if (player.isPlaying) player.pause() else player.play()
+            onInteract()
+        }
+        val cycleSpeed = {
+            val speeds = listOf(1f, 1.5f, 2f, 0.5f)
+            speed = speeds[(speeds.indexOf(speed) + 1) % speeds.size]
+            player.setSpeed(speed)
+            onInteract()
+        }
+
         // Keyboard: space = the double-tap, ← / → = a short horizontal swipe.
         KeyHandler { e ->
             when (e.key) {
-                Key.Spacebar, Key.K -> if (player.isPlaying) player.pause() else player.play()
+                Key.Spacebar, Key.K -> togglePlay()
                 Key.DirectionLeft, Key.DirectionRight -> {
                     val step = if (e.key == Key.DirectionLeft) -5_000L else 5_000L
                     val target = player.currentPosition + step
                     player.seekTo(if (duration > 0) target.coerceIn(0L, duration) else target.coerceAtLeast(0L))
+                    onInteract()
                 }
                 else -> return@KeyHandler false
             }
-            onInteract()
             true
         }
 
@@ -415,13 +481,13 @@ private fun ActiveVideo(
         if (boosting) {
             Text(
                 "▶▶ 2x 倍速中",
-                color = Color.White,
+                color = MediaColors.Text,
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
                     .padding(top = 56.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(16.dp))
+                    .background(MediaColors.Scrim, AppShapes.Full)
                     .padding(horizontal = 14.dp, vertical = 6.dp),
             )
         }
@@ -432,18 +498,18 @@ private fun ActiveVideo(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .background(Color(0x99000000), RoundedCornerShape(12.dp))
+                    .background(MediaColors.Scrim, AppShapes.Medium)
                     .padding(horizontal = 20.dp, vertical = 10.dp),
             ) {
                 Text(
                     "${formatMillis(swipeTarget)} / ${formatMillis(duration)}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                    color = MediaColors.Text,
+                    style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
                     (if (delta >= 0) "+" else "-") + formatMillis(kotlin.math.abs(delta)),
-                    color = Color(0xB3FFFFFF),
-                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                    color = MediaColors.Text2,
+                    style = MaterialTheme.typography.labelMedium,
                 )
             }
         } else if (buffering) {
@@ -451,7 +517,7 @@ private fun ActiveVideo(
                 Modifier
                     .align(Alignment.Center)
                     .size(40.dp),
-                color = Color.White,
+                color = MediaColors.Text,
                 strokeWidth = 3.dp,
             )
         } else if (!playing && duration > 0) {
@@ -459,11 +525,11 @@ private fun ActiveVideo(
             Icon(
                 Icons.Default.PlayArrow,
                 contentDescription = null,
-                tint = Color(0xCCFFFFFF),
+                tint = MediaColors.Text2,
                 modifier = Modifier
                     .align(Alignment.Center)
                     .size(72.dp)
-                    .background(Color(0x66000000), CircleShape)
+                    .background(MediaColors.Scrim, CircleShape)
                     .padding(12.dp),
             )
         }
@@ -471,8 +537,8 @@ private fun ActiveVideo(
         // Always show the progress bar while swiping so the target position is visible.
         AnimatedVisibility(
             visible = chrome || swiping,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(Motion.FADE, easing = Motion.Easing)),
+            exit = fadeOut(tween(Motion.FADE, easing = Motion.Easing)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             val shown = when {
@@ -480,26 +546,8 @@ private fun ActiveVideo(
                 swiping -> swipeTarget
                 else -> position
             }
-            val timeStyle = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000))))
-                    .navigationBarsPadding()
-                    .padding(start = 4.dp, end = 4.dp, top = 24.dp, bottom = 4.dp),
-            ) {
-                IconButton(onClick = {
-                    if (player.isPlaying) player.pause() else player.play()
-                    onInteract()
-                }) {
-                    Icon(
-                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (playing) "暂停" else "播放",
-                        tint = Color.White,
-                    )
-                }
-                Text(formatMillis(shown), color = Color.White, style = timeStyle)
+            val timeStyle = MaterialTheme.typography.labelMedium
+            val seekBar = @Composable { modifier: Modifier ->
                 ThinSeekBar(
                     progress = if (duration > 0) (shown.toFloat() / duration).coerceIn(0f, 1f) else 0f,
                     buffered = if (duration > 0) (bufferedPos.toFloat() / duration).coerceIn(0f, 1f) else 0f,
@@ -513,22 +561,72 @@ private fun ActiveVideo(
                         player.seekTo((dragValue * duration).toLong())
                         dragging = false
                     },
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 12.dp),
+                    modifier = modifier,
                 )
-                Text(formatMillis(duration), color = Color(0xB3FFFFFF), style = timeStyle)
-                TextButton(onClick = {
-                    val speeds = listOf(1f, 1.5f, 2f, 0.5f)
-                    speed = speeds[(speeds.indexOf(speed) + 1) % speeds.size]
-                    player.setSpeed(speed)
-                    onInteract()
-                }) {
+            }
+            val playButton = @Composable {
+                IconButton(onClick = togglePlay) {
+                    Icon(
+                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (playing) "暂停" else "播放",
+                        tint = MediaColors.Text,
+                    )
+                }
+            }
+            val speedButton = @Composable {
+                TextButton(onClick = cycleSpeed) {
                     Text(
                         if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x",
-                        color = Color.White,
+                        color = MediaColors.Text,
                         style = MaterialTheme.typography.labelMedium,
                     )
+                }
+            }
+            val bar = Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, MediaColors.ScrimStrong)))
+                .navigationBarsPadding()
+            if (isDesktop) {
+                // Windows: progress on its own row, then 上一个 / 播放 / 下一个.
+                Column(bar.padding(start = 20.dp, end = 20.dp, top = 40.dp, bottom = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(formatMillis(shown), color = MediaColors.Text, style = timeStyle)
+                        seekBar(Modifier.weight(1f).padding(horizontal = 12.dp))
+                        Text(formatMillis(duration), color = MediaColors.Text2, style = timeStyle)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onPrev, enabled = hasPrev) {
+                            Icon(Icons.Default.SkipPrevious, null, tint = if (hasPrev) MediaColors.Text else MediaColors.Track)
+                            Text("上一个", color = if (hasPrev) MediaColors.Text else MediaColors.Track, modifier = Modifier.padding(start = 4.dp))
+                        }
+                        playButton()
+                        TextButton(onClick = onNext, enabled = hasNext) {
+                            Text("下一个", color = if (hasNext) MediaColors.Text else MediaColors.Track, modifier = Modifier.padding(end = 4.dp))
+                            Icon(Icons.Default.SkipNext, null, tint = if (hasNext) MediaColors.Text else MediaColors.Track)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        speedButton()
+                        IconButton(onClick = { toggleFullscreen() }) {
+                            Icon(Icons.Default.Fullscreen, "全屏", tint = MediaColors.Text)
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = bar.padding(start = 4.dp, end = 4.dp, top = 28.dp, bottom = 8.dp),
+                ) {
+                    playButton()
+                    Text(formatMillis(shown), color = MediaColors.Text, style = timeStyle)
+                    seekBar(Modifier.weight(1f).padding(horizontal = 12.dp))
+                    Text(formatMillis(duration), color = MediaColors.Text2, style = timeStyle)
+                    speedButton()
+                    IconButton(onClick = {
+                        onRotate()
+                        onInteract()
+                    }) {
+                        Icon(Icons.Default.ScreenRotation, "横屏 / 竖屏", tint = MediaColors.Text)
+                    }
                 }
             }
         }
@@ -580,10 +678,10 @@ private fun ThinSeekBar(
         val y = size.height / 2
         val w = size.width
         val t = track.toPx()
-        drawLine(Color(0x40FFFFFF), Offset(0f, y), Offset(w, y), t, StrokeCap.Round)
-        drawLine(Color(0x66FFFFFF), Offset(0f, y), Offset(w * buffered, y), t, StrokeCap.Round)
-        drawLine(Color.White, Offset(0f, y), Offset(w * progress, y), t, StrokeCap.Round)
-        drawCircle(Color.White, thumb.toPx() / 2, Offset(w * progress, y))
+        drawLine(MediaColors.Track, Offset(0f, y), Offset(w, y), t, StrokeCap.Round)
+        drawLine(MediaColors.Buffered, Offset(0f, y), Offset(w * buffered, y), t, StrokeCap.Round)
+        drawLine(MediaColors.Text, Offset(0f, y), Offset(w * progress, y), t, StrokeCap.Round)
+        drawCircle(MediaColors.Text, thumb.toPx() / 2, Offset(w * progress, y))
     }
 }
 

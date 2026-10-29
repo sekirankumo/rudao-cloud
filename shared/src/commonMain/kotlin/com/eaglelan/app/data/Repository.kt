@@ -14,6 +14,8 @@ sealed interface Filter {
     data object Uncategorized : Filter
     data object Trash : Filter
     data object Favorites : Filter
+    /** Videos left part-way through, most recently watched first. */
+    data object Continue : Filter
     data class Folder(val id: String, val name: String) : Filter
 }
 
@@ -116,6 +118,17 @@ class Repository(
         return d
     }
 
+    /**
+     * Remembers where a video was left off. Near the start or the end counts as "not started" /
+     * "finished", which drops it from 继续观看.
+     */
+    suspend fun savePosition(id: String, positionMs: Long, durationMs: Long, now: Long) {
+        if (durationMs <= 0 || positionMs < 5_000 || positionMs > durationMs - 10_000) dao.clearPlayback(id)
+        else dao.savePlayback(Playback(id, positionMs, durationMs, now))
+    }
+
+    suspend fun position(id: String): Long? = dao.playback(id)?.positionMs
+
     fun thumbUrl(id: String) = api().thumbUrl(id)
     fun fileUrl(id: String) = api().fileUrl(id)
 
@@ -186,6 +199,10 @@ class Repository(
                 sql.append("INNER JOIN favorites fav ON fav.itemId = items.id ")
                 where += "items.isDeleted = 0"
             }
+            Filter.Continue -> {
+                sql.append("INNER JOIN playback pb ON pb.itemId = items.id ")
+                where += "items.isDeleted = 0"
+            }
             is Filter.Folder -> {
                 sql.append("INNER JOIN item_folder f ON f.itemId = items.id ")
                 where += "f.folderId = ?"
@@ -204,8 +221,12 @@ class Repository(
             args.addAll(group)
         }
         sql.append("WHERE ").append(where.joinToString(" AND "))
-        // In 收藏 the default order is "most recently favourited first".
-        val order = if (filter == Filter.Favorites && sort == Sort.ADDED) "fav.addedAt DESC" else sort.sql
+        // In 收藏 / 继续观看 the default order is "most recently favourited / watched first".
+        val order = when {
+            filter == Filter.Favorites && sort == Sort.ADDED -> "fav.addedAt DESC"
+            filter == Filter.Continue && sort == Sort.ADDED -> "pb.updatedAt DESC"
+            else -> sort.sql
+        }
         sql.append(" ORDER BY ").append(order)
         return dao.observe(RoomRawQuery(sql.toString()) { st -> args.forEachIndexed { i, a -> st.bindText(i + 1, a) } })
     }

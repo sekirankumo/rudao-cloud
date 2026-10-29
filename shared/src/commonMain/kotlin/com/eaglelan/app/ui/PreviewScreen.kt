@@ -1,6 +1,7 @@
 package com.eaglelan.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -308,11 +311,11 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
             Icon(
                 Icons.Default.PlayArrow,
                 contentDescription = null,
-                tint = Color(0xCCFFFFFF),
+                tint = MediaColors.Text2,
                 modifier = Modifier
                     .align(Alignment.Center)
                     .size(72.dp)
-                    .background(Color(0x66000000), CircleShape)
+                    .background(MediaColors.Scrim, CircleShape)
                     .padding(12.dp),
             )
         } else if (buffering) {
@@ -320,7 +323,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 Modifier
                     .align(Alignment.Center)
                     .size(40.dp),
-                color = Color.White,
+                color = MediaColors.Text,
                 strokeWidth = 3.dp,
             )
         }
@@ -328,8 +331,10 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
         // Clip progress, always visible as a hairline at the bottom.
         LinearProgressIndicator(
             progress = { progress },
-            color = Color.White,
-            trackColor = Color(0x33FFFFFF),
+            color = MediaColors.Text,
+            trackColor = MediaColors.Track,
+            drawStopIndicator = {},
+            gapSize = 0.dp,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
@@ -338,8 +343,8 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
 
         AnimatedVisibility(
             visible = chrome && clip != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(Motion.FADE, easing = Motion.Easing)),
+            exit = fadeOut(tween(Motion.FADE, easing = Motion.Easing)),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             if (clip == null) return@AnimatedVisibility
@@ -348,16 +353,22 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+                    .background(Brush.verticalGradient(listOf(MediaColors.ScrimStrong, Color.Transparent)))
                     .statusBarsPadding()
-                    .padding(bottom = 24.dp),
+                    .padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 28.dp),
             ) {
-                IconButton(onClick = onClose) { Icon(Icons.Default.Close, "退出速览", tint = Color.White) }
+                IconButton(onClick = onClose) { Icon(Icons.Default.Close, "退出速览", tint = MediaColors.Text) }
                 Column(Modifier.weight(1f)) {
-                    Text(clip.item.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        clip.item.name,
+                        color = MediaColors.Text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Text(
                         "随机速览 · 第 $clipNo 段 · 从 ${formatMillis(clip.startMs)} 开始",
-                        color = Color(0xB3FFFFFF),
+                        color = MediaColors.Text2,
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
@@ -365,7 +376,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                     Icon(
                         if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = if (fav) "取消收藏" else "收藏",
-                        tint = if (fav) FAVORITE_RED else Color.White,
+                        tint = if (fav) AppColors.Favorite else MediaColors.Text,
                     )
                 }
             }
@@ -373,55 +384,61 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
 
         AnimatedVisibility(
             visible = chrome && clip != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(Motion.FADE, easing = Motion.Easing)),
+            exit = fadeOut(tween(Motion.FADE, easing = Motion.Easing)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             if (clip == null) return@AnimatedVisibility
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, MediaColors.ScrimStrong)))
                     .navigationBarsPadding()
-                    .padding(start = 8.dp, end = 8.dp, top = 24.dp, bottom = 12.dp),
+                    .padding(start = 8.dp, end = 8.dp, top = 32.dp, bottom = 12.dp),
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
-                    Text("每段", color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelMedium)
+                    Text("每段", color = MediaColors.Text2, style = MaterialTheme.typography.labelMedium)
                     CLIP_LENGTHS.forEach { sec ->
                         FilterChip(
                             selected = sec == clipSec,
                             onClick = { vm.setPreviewSeconds(sec) },
                             label = { Text("${sec}秒") },
-                            colors = FilterChipDefaults.filterChipColors(labelColor = Color.White),
+                            shape = AppShapes.Full,
+                            colors = FilterChipDefaults.filterChipColors(labelColor = MediaColors.Text),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = sec == clipSec,
+                                borderColor = MediaColors.Track,
+                                selectedBorderColor = Color.Transparent,
+                            ),
                         )
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { pendingNav = -1 }) {
-                        Icon(Icons.Default.SkipPrevious, "上一段", tint = Color.White)
+                        Icon(Icons.Default.SkipPrevious, "上一段", tint = MediaColors.Text)
                     }
                     IconButton(onClick = { paused = !paused }) {
                         Icon(
                             if (paused) Icons.Default.PlayArrow else Icons.Default.Pause,
                             contentDescription = if (paused) "继续" else "暂停",
-                            tint = Color.White,
+                            tint = MediaColors.Text,
                         )
                     }
                     IconButton(onClick = { pendingNav = 1 }) {
-                        Icon(Icons.Default.SkipNext, "下一段", tint = Color.White)
+                        Icon(Icons.Default.SkipNext, "下一段", tint = MediaColors.Text)
                     }
-                    Text(
-                        "上滑下一段 / 下滑上一段",
-                        color = Color(0x99FFFFFF),
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = { onWatchFull(clip.item, players[cur].currentPosition) }) {
-                        Text("看完整", color = Color.White)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        onClick = { onWatchFull(clip.item, players[cur].currentPosition) },
+                        shape = AppShapes.Full,
+                        colors = ButtonDefaults.textButtonColors(containerColor = MediaColors.Chip, contentColor = MediaColors.Text),
+                    ) {
+                        Text("看完整")
                     }
                 }
             }
