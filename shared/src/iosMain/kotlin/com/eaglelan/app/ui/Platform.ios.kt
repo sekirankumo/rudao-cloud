@@ -24,8 +24,9 @@ actual fun LandscapeLock(enabled: Boolean) {
     }
 }
 
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 private fun requestOrientation(mask: UIInterfaceOrientationMask) {
-    val scene = UIApplication.sharedApplication.connectedScenes.anyObject() as? UIWindowScene ?: return
+    val scene = UIApplication.sharedApplication.connectedScenes.firstOrNull() as? UIWindowScene ?: return
     if (!scene.respondsToSelector(NSSelectorFromString("requestGeometryUpdateWithPreferences:errorHandler:"))) return
     scene.requestGeometryUpdateWithPreferences(UIWindowSceneGeometryPreferencesIOS(mask), null)
 }
