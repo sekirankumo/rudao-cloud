@@ -13,4 +13,6 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "RudaoCloud"
-include(":app")
+// shared: all screens and data code (Compose Multiplatform); the others are thin per-platform shells.
+// The iOS shell (iosApp/) is an Xcode project that links the shared framework.
+include(":shared", ":app", ":desktopApp")
