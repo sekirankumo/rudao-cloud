@@ -25,6 +25,8 @@ fun UpdateDialog(vm: MainViewModel) {
 
     AlertDialog(
         onDismissRequest = { if (!downloading) vm.dismissUpdate() },
+        shape = AppShapes.Medium,
+        containerColor = AppColors.Surface2,
         title = { Text("发现新版本 v${rel.version}") },
         text = {
             Column {

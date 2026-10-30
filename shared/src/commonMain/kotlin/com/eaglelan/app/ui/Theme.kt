@@ -3,10 +3,13 @@ package com.eaglelan.app.ui
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -139,7 +142,15 @@ fun AppTheme(content: @Composable () -> Unit) {
         labelMedium = style(12, 16, FontWeight.Medium, f),
         labelSmall = style(11, 16, FontWeight.Medium, f),
     )
-    MaterialTheme(colorScheme = scheme, typography = typography, content = content)
+    MaterialTheme(colorScheme = scheme, typography = typography) {
+        // Default text / icon colour for every screen. Without this, anything not inside a Surface or
+        // Scaffold (the library, settings, the floating top bar) falls back to black.
+        CompositionLocalProvider(
+            LocalContentColor provides AppColors.Text1,
+            LocalTextStyle provides typography.bodyLarge,
+            content = content,
+        )
+    }
 }
 
 /** Filled buttons use the brand blue with white text (M3's default would be the light accent). */
