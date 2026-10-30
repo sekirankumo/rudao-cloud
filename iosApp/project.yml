@@ -17,10 +17,11 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
-    info:
-      path: Info.plist
     settings:
       base:
+        # Use the hand-written Info.plist as-is (XcodeGen's `info:` would regenerate it and drop our keys).
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
         PRODUCT_NAME: RudaoCloud
         PRODUCT_BUNDLE_IDENTIFIER: com.eaglelan.app
         TARGETED_DEVICE_FAMILY: "1,2"
