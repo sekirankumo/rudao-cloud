@@ -1,0 +1,54 @@
+# Builds the iOS app for the simulator, launches it, and collects what happens:
+# console output, a screenshot after startup, and any crash report.
+# Runs on pushes to the ios-smoke branch (or manually).
+name: iOS smoke test
+
+on:
+  push:
+    branches: [ios-smoke]
+  workflow_dispatch:
+
+jobs:
+  simulator:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build for simulator
+        run: |
+          chmod +x gradlew
+          brew install xcodegen
+          (cd iosApp && xcodegen generate)
+          xcodebuild -project iosApp/RudaoCloud.xcodeproj -scheme RudaoCloud -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/sim \
+            ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build | tail -20
+      - name: Launch and observe
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)['devices']
+          print([x['udid'] for k, v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')][-1])")
+          echo "device $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" build/sim/Build/Products/Debug-iphonesimulator/RudaoCloud.app
+          (xcrun simctl launch --console-pty "$UDID" com.eaglelan.app > launch.log 2>&1 &)
+          sleep 45
+          xcrun simctl io "$UDID" screenshot shot.png || true
+          xcrun simctl spawn "$UDID" launchctl list | grep -i eaglelan && echo "APP STILL RUNNING" || echo "APP NOT RUNNING"
+          echo "===== console ====="
+          tail -150 launch.log || true
+          echo "===== crash reports ====="
+          ls ~/Library/Logs/DiagnosticReports/ 2>/dev/null | grep -i rudao || echo "none"
+          for f in ~/Library/Logs/DiagnosticReports/*Rudao*; do [ -f "$f" ] && head -150 "$f"; done
+          mkdir -p out && cp launch.log shot.png out/ 2>/dev/null || true
+          cp ~/Library/Logs/DiagnosticReports/*Rudao* out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-smoke
+          path: out/

@@ -4,7 +4,7 @@ name: Build
 
 on:
   push:
-    branches-ignore: [main]
+    branches-ignore: [main, ios-smoke]
   workflow_dispatch:
 
 jobs:
