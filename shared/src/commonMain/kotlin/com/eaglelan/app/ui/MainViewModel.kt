@@ -76,6 +76,8 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
     val appVersion get() = updater.currentVersion
     val syncing = MutableStateFlow(false)
     val message = MutableStateFlow<String?>(null)
+    /** Whether the server lets this token trash items from here (LAN + 允许删除); refreshed with each ping. */
+    val canTrash = MutableStateFlow(false)
     val folders = MutableStateFlow(repo.folders())
 
     val items: StateFlow<List<ItemEntity>> =
@@ -174,10 +176,20 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
         if (!configured.value) return
         try {
             val ping = repo.ping()
+            canTrash.value = ping.canTrash
             setConn(true, "${ping.library} · ${ping.items} 项")
         } catch (e: Exception) {
+            canTrash.value = false
             setConn(false, e.why)
         }
+    }
+
+    /** Moves an item to Eagle's trash. Returns null on success, else why it failed. */
+    suspend fun trash(id: String): String? = try {
+        repo.trash(id)
+        null
+    } catch (e: Exception) {
+        e.why
     }
 
     fun recheckConnection() {

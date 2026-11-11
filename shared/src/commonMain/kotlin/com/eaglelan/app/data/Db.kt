@@ -143,6 +143,9 @@ interface ItemDao {
     @Query("SELECT id FROM items")
     suspend fun allIds(): List<String>
 
+    @Query("UPDATE items SET isDeleted = 1 WHERE id = :id")
+    suspend fun markDeleted(id: String)
+
     @Query("DELETE FROM items WHERE id IN (:ids)")
     suspend fun deleteItems(ids: List<String>)
 

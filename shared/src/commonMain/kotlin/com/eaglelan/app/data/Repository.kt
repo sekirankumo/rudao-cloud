@@ -129,6 +129,12 @@ class Repository(
 
     suspend fun position(id: String): Long? = dao.playback(id)?.positionMs
 
+    /** Moves an item to Eagle's trash on the computer, then mirrors it locally (the next sync agrees). */
+    suspend fun trash(id: String) {
+        api().trash(id)
+        dao.markDeleted(id)
+    }
+
     fun thumbUrl(id: String) = api().thumbUrl(id)
     fun fileUrl(id: String) = api().fileUrl(id)
 

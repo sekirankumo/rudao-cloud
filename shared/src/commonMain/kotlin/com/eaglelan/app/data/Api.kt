@@ -6,6 +6,7 @@ import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.encodeURLParameter
@@ -13,6 +14,8 @@ import io.ktor.http.isSuccess
 import io.ktor.utils.io.charsets.Charsets
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 val AppJson = Json {
     ignoreUnknownKeys = true
@@ -30,7 +33,13 @@ fun <T : HttpClientEngineConfig> createHttpClient(engine: HttpClientEngineFactor
     }
 
 @Serializable
-data class PingDto(val app: String = "", val library: String = "", val items: Int = 0)
+data class PingDto(
+    val app: String = "",
+    val library: String = "",
+    val items: Int = 0,
+    /** This token may move items to Eagle's trash from where the phone is now (decided by the server). */
+    val canTrash: Boolean = false,
+)
 
 @Serializable
 data class FolderDto(
@@ -88,6 +97,16 @@ class Api(private val client: HttpClient, val baseUrl: String, private val token
             !resp.status.isSuccess() -> throw ApiException("服务器返回 HTTP ${resp.status.value}")
             else -> AppJson.decodeFromString(LoudnessDto.serializer(), resp.text())
         }
+    }
+
+    /** Moves an item to Eagle's trash. The token goes in the header only; the server checks the rest. */
+    suspend fun trash(id: String) {
+        val resp = client.post("$baseUrl/api/trash/${id.encodeURLParameter()}") { header("X-Token", token) }
+        if (resp.status.isSuccess()) return
+        val msg = runCatching {
+            AppJson.parseToJsonElement(resp.text()).jsonObject["error"]?.jsonPrimitive?.content
+        }.getOrNull()
+        throw ApiException(msg ?: "服务器返回 HTTP ${resp.status.value}")
     }
 
     fun thumbUrl(id: String) = "$baseUrl/api/thumb/$id?token=$tokenParam"

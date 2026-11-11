@@ -22,12 +22,14 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -75,13 +77,18 @@ import kotlin.random.Random
 /** One 随机速览 segment: a random window of [lengthMs] starting at [startMs]. */
 private data class Clip(val item: ItemEntity, val startMs: Long, val lengthMs: Long, val loud: LoudnessDto? = null)
 
-/** Deals clips from the pool in shuffled order, reshuffling when it runs out. */
-private class ClipDeck(private val pool: List<ItemEntity>) {
+/** Deals clips from the pool in shuffled order, reshuffling when it runs out. Trashed items are skipped. */
+private class ClipDeck(private val pool: List<ItemEntity>, private val trashed: Set<String>) {
     private val queue = ArrayDeque<ItemEntity>()
 
+    val isEmpty get() = pool.all { it.id in trashed }
+
     fun next(lengthMs: Long): Clip {
-        if (queue.isEmpty()) queue.addAll(pool.shuffled())
-        val item = queue.removeFirst()
+        var item: ItemEntity
+        do {
+            if (queue.isEmpty()) queue.addAll(pool.filter { it.id !in trashed }.shuffled())
+            item = queue.removeFirstOrNull() ?: return Clip(pool.first(), 0, 1000)   // all trashed: caller closes
+        } while (item.id in trashed)
         val dur = (item.duration * 1000).toLong()
         if (dur <= lengthMs + 1000) return Clip(item, 0, dur.coerceAtLeast(1000))   // short video: play it all
         // skip intros/outros: start somewhere in 5%..95% of the video
@@ -122,7 +129,12 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
 
     val players = remember { List(2) { vm.newPlayer(PlayerKind.PREVIEW) } }
     DisposableEffect(Unit) { onDispose { players.forEach { it.release() } } }
-    val deck = remember { ClipDeck(pool) }
+    val trashed = remember { HashSet<String>() }        // trashed during this session: never dealt again
+    val deck = remember { ClipDeck(pool, trashed) }
+    val canTrash by vm.canTrash.collectAsStateWithLifecycle()
+    var confirmTrash by remember { mutableStateOf<ItemEntity?>(null) }
+    var trashing by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { vm.checkConnection() }   // refresh 能否删除 for where the phone is right now
     val slots = remember { mutableStateListOf<Clip?>(null, null) }
     val scope = rememberCoroutineScope()
 
@@ -220,15 +232,27 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 break
             }
 
+            if (deck.isEmpty) {
+                vm.message.value = "列表里的视频都已放入回收站"
+                onClose()
+                break
+            }
             val nav = pendingNav
             pendingNav = 0
-            val target = if (nav != 0) pos + nav else pos + 1
+            val step = if (nav < 0) -1 else 1
+            var target = pos + step
+            // Going back skips clips trashed meanwhile; going forward replaces them with fresh ones.
+            if (step < 0) while (target >= 0 && history[target].item.id in trashed) target--
             if (target < 0) {
                 vm.message.value = "已经是第一段"
                 continue                        // replay the current clip from its start
             }
             pos = target
             while (history.size <= pos) history.add(newClip())
+            if (history[pos].item.id in trashed) {
+                history[pos] = newClip()
+                for (i in 0..1) if (slotIndex[i] == pos) slotIndex[i] = -1   // that player holds the old clip
+            }
             clipNo = pos + 1
             if (failed) delay(300)
         }
@@ -372,6 +396,11 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
+                if (canTrash) {
+                    IconButton(onClick = { confirmTrash = clip.item }, enabled = !trashing) {
+                        Icon(Icons.Default.Delete, contentDescription = "放入回收站", tint = MediaColors.Text)
+                    }
+                }
                 IconButton(onClick = { vm.toggleFavorite(clip.item.id) }) {
                     Icon(
                         if (fav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -443,5 +472,31 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit, onWatchFull: (ItemEnti
                 }
             }
         }
+    }
+
+    confirmTrash?.let { item ->
+        AlertDialog(
+            onDismissRequest = { confirmTrash = null },
+            title = { Text("放入回收站？") },
+            text = { Text("「${item.name}」会移到电脑上 Eagle 的回收站，可以在 Eagle 里还原。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmTrash = null
+                    trashing = true
+                    scope.launch {
+                        val err = vm.trash(item.id)
+                        trashing = false
+                        if (err == null) {
+                            trashed += item.id
+                            vm.message.value = "已放入回收站"
+                            pendingNav = 1
+                        } else {
+                            vm.message.value = "删除失败：$err"
+                        }
+                    }
+                }) { Text("放入回收站", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmTrash = null }) { Text("取消") } },
+        )
     }
 }
