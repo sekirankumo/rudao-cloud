@@ -135,6 +135,12 @@ class Repository(
         dao.markDeleted(id)
     }
 
+    /** Rates an item in Eagle (0 = no rating), then mirrors it locally. */
+    suspend fun setStar(id: String, star: Int) {
+        api().setStar(id, star)
+        dao.setStar(id, star)
+    }
+
     fun thumbUrl(id: String) = api().thumbUrl(id)
     fun fileUrl(id: String) = api().fileUrl(id)
 
@@ -190,7 +196,7 @@ class Repository(
     fun folders(): List<FolderDto> =
         runCatching { AppJson.decodeFromString<List<FolderDto>>(prefs.foldersJson) }.getOrDefault(emptyList())
 
-    fun observe(filter: Filter, sort: Sort, search: String, tags: Set<String>): Flow<List<ItemEntity>> {
+    fun observe(filter: Filter, sort: Sort, search: String, tags: Set<String>, stars: Set<Int> = emptySet()): Flow<List<ItemEntity>> {
         val args = mutableListOf<String>()
         val where = mutableListOf<String>()
         val sql = StringBuilder("SELECT items.* FROM items ")
@@ -226,6 +232,9 @@ class Repository(
             where += "items.id IN (SELECT itemId FROM item_tag WHERE tag IN (${group.joinToString(",") { "?" }}))"
             args.addAll(group)
         }
+        // Ratings: any of the picked ones (0 = 未评分). Plain ints, so they go into the SQL directly.
+        val picked = stars.filter { it in 0..5 }
+        if (picked.isNotEmpty()) where += "items.star IN (${picked.joinToString(",")})"
         sql.append("WHERE ").append(where.joinToString(" AND "))
         // In 收藏 / 继续观看 the default order is "most recently favourited / watched first".
         val order = when {

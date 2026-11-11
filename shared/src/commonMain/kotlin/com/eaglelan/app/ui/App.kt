@@ -80,16 +80,8 @@ fun App(services: AppServices) {
                     onPreview = { previewing = true },
                 )
                 if (previewing) {
-                    PreviewScreen(
-                        vm = vm,
-                        onClose = { previewing = false },
-                        onWatchFull = { item, positionMs ->
-                            // open the normal player on that video, at the moment being previewed
-                            PlaybackMemory.positions[item.id] = positionMs
-                            previewing = false
-                            viewerIndex = vm.items.value.indexOfFirst { it.id == item.id }
-                        },
-                    )
+                    // 看全片 now plays inside the preview, like the desktop plugin.
+                    PreviewScreen(vm = vm, onClose = { previewing = false })
                 }
                 if (viewerIndex >= 0) {
                     ViewerScreen(

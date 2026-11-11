@@ -76,16 +76,21 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
     val appVersion get() = updater.currentVersion
     val syncing = MutableStateFlow(false)
     val message = MutableStateFlow<String?>(null)
-    /** Whether the server lets this token trash items from here (LAN + 允许删除); refreshed with each ping. */
-    val canTrash = MutableStateFlow(false)
+    /** 管理员: the server lets this token rate / trash items from here (LAN only); refreshed with each ping. */
+    val canManage = MutableStateFlow(false)
+    /** Rating filter for everyone: 0 = 未评分, 1..5 stars; empty = no filter. */
+    val selectedStars = MutableStateFlow<Set<Int>>(emptySet())
     val folders = MutableStateFlow(repo.folders())
 
     val items: StateFlow<List<ItemEntity>> =
-        combine(filter, sort, search.debounce(250), selectedTags, shuffleSeed) { f, s, q, t, seed ->
-            Query(f, s, q, t, seed)
-        }
+        combine(
+            combine(filter, sort, search.debounce(250), selectedTags, shuffleSeed) { f, s, q, t, seed ->
+                Query(f, s, q, t, seed)
+            },
+            selectedStars,
+        ) { q, st -> q.copy(stars = st) }
             .flatMapLatest { q ->
-                repo.observe(q.filter, q.sort, q.search, q.tags).map { list ->
+                repo.observe(q.filter, q.sort, q.search, q.tags, q.stars).map { list ->
                     if (q.sort == Sort.RANDOM) list.shuffled(Random(q.seed)) else list
                 }
             }
@@ -176,10 +181,10 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
         if (!configured.value) return
         try {
             val ping = repo.ping()
-            canTrash.value = ping.canTrash
+            canManage.value = ping.canManage
             setConn(true, "${ping.library} · ${ping.items} 项")
         } catch (e: Exception) {
-            canTrash.value = false
+            canManage.value = false
             setConn(false, e.why)
         }
     }
@@ -190,6 +195,38 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
         null
     } catch (e: Exception) {
         e.why
+    }
+
+    /** Rates an item in Eagle (0 = none). Returns null on success, else why it failed. */
+    suspend fun setStar(id: String, star: Int): String? = try {
+        repo.setStar(id, star)
+        null
+    } catch (e: Exception) {
+        e.why
+    }
+
+    // 随机速览's delete works like the desktop plugin: it is held back a few seconds so it can be
+    // undone (there is no "restore" in Eagle's API). Held in the view model so closing the preview
+    // inside that window still deletes.
+    private val pendingTrash = mutableMapOf<String, kotlinx.coroutines.Job>()
+
+    fun trashLater(id: String, delayMs: Long, onFailed: (String) -> Unit) {
+        pendingTrash.remove(id)?.cancel()
+        pendingTrash[id] = viewModelScope.launch {
+            kotlinx.coroutines.delay(delayMs)
+            pendingTrash.remove(id)
+            trash(id)?.let { err ->
+                onFailed(err)
+                message.value = "放入回收站失败：$err"
+            }
+        }
+    }
+
+    /** True if the delete was still pending and is now cancelled. */
+    fun undoTrash(id: String): Boolean = pendingTrash.remove(id)?.let { it.cancel(); true } ?: false
+
+    fun toggleStar(star: Int) {
+        selectedStars.value = selectedStars.value.let { if (star in it) it - star else it + star }
     }
 
     fun recheckConnection() {
@@ -357,4 +394,5 @@ private data class Query(
     val search: String,
     val tags: Set<String>,
     val seed: Long,
+    val stars: Set<Int> = emptySet(),
 )

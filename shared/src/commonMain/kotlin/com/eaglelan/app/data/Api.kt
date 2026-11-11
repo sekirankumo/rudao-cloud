@@ -7,6 +7,9 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
+import io.ktor.http.content.TextContent
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.encodeURLParameter
@@ -37,8 +40,8 @@ data class PingDto(
     val app: String = "",
     val library: String = "",
     val items: Int = 0,
-    /** This token may move items to Eagle's trash from where the phone is now (decided by the server). */
-    val canTrash: Boolean = false,
+    /** 管理员: this token may rate items and move them to Eagle's trash from where the phone is now. */
+    val canManage: Boolean = false,
 )
 
 @Serializable
@@ -100,8 +103,16 @@ class Api(private val client: HttpClient, val baseUrl: String, private val token
     }
 
     /** Moves an item to Eagle's trash. The token goes in the header only; the server checks the rest. */
-    suspend fun trash(id: String) {
-        val resp = client.post("$baseUrl/api/trash/${id.encodeURLParameter()}") { header("X-Token", token) }
+    suspend fun trash(id: String) = manage("trash", id, null)
+
+    /** Sets an item's Eagle rating, 0 = none. */
+    suspend fun setStar(id: String, star: Int) = manage("star", id, "{\"star\":${star.coerceIn(0, 5)}}")
+
+    private suspend fun manage(action: String, id: String, json: String?) {
+        val resp = client.post("$baseUrl/api/$action/${id.encodeURLParameter()}") {
+            header("X-Token", token)
+            if (json != null) setBody(TextContent(json, ContentType.Application.Json))
+        }
         if (resp.status.isSuccess()) return
         val msg = runCatching {
             AppJson.parseToJsonElement(resp.text()).jsonObject["error"]?.jsonPrimitive?.content

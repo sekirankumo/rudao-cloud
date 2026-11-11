@@ -39,6 +39,8 @@ object AppColors {
     val Text3 = Color(0xFF858C99)
     /** Filled buttons and the app icon; white text on it passes 4.5:1. */
     val Brand = Color(0xFF2A6FE0)
+    /** Eagle-style rating stars. */
+    val Star = Color(0xFFFFC53D)
     /** Text buttons, icons and links on dark surfaces. */
     val Accent = Color(0xFF9DBBFF)
     val Selected = Color(0xFF1E2D4A)

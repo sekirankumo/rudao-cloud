@@ -55,6 +55,9 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -174,6 +177,7 @@ fun LibraryScreen(
     val message by vm.message.collectAsStateWithLifecycle()
     val favToast by vm.favToast.collectAsStateWithLifecycle()
     val selectedTags by vm.selectedTags.collectAsStateWithLifecycle()
+    val selectedStars by vm.selectedStars.collectAsStateWithLifecycle()
     val seed by vm.shuffleSeed.collectAsStateWithLifecycle()
     val favorites by vm.favorites.collectAsStateWithLifecycle()
     val progress by vm.progress.collectAsStateWithLifecycle()
@@ -360,7 +364,7 @@ fun LibraryScreen(
                 if (items.isEmpty() && !syncing) {
                     EmptyState(
                         vm = vm,
-                        filtered = search.isNotBlank() || selectedTags.isNotEmpty(),
+                        filtered = search.isNotBlank() || selectedTags.isNotEmpty() || selectedStars.isNotEmpty(),
                         filter = filter,
                         modifier = Modifier.align(Alignment.Center),
                     )
@@ -466,13 +470,23 @@ fun LibraryScreen(
                         IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "设置") }
                     }
                 }
-                if (selectedTags.isNotEmpty()) {
+                if (selectedTags.isNotEmpty() || selectedStars.isNotEmpty()) {
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp),
                         modifier = Modifier.height(44.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        items(selectedStars.sorted(), key = { "star:$it" }) { star ->
+                            InputChip(
+                                selected = true,
+                                onClick = { vm.toggleStar(star) },
+                                label = { Text(starLabel(star)) },
+                                shape = AppShapes.Full,
+                                border = null,
+                                trailingIcon = { Icon(Icons.Default.Close, "移除", Modifier.size(16.dp)) },
+                            )
+                        }
                         items(selectedTags.toList(), key = { it }) { tag ->
                             InputChip(
                                 selected = true,
@@ -485,7 +499,10 @@ fun LibraryScreen(
                         }
                         item {
                             AssistChip(
-                                onClick = { vm.selectedTags.value = emptySet() },
+                                onClick = {
+                                    vm.selectedTags.value = emptySet()
+                                    vm.selectedStars.value = emptySet()
+                                },
                                 label = { Text("清除全部", color = AppColors.Text2) },
                                 shape = AppShapes.Full,
                             )
@@ -623,6 +640,7 @@ private fun EmptyState(vm: MainViewModel, filtered: Boolean, filter: Filter, mod
                 filtered -> {
                     Button(onClick = {
                         vm.selectedTags.value = emptySet()
+                        vm.selectedStars.value = emptySet()
                         vm.search.value = ""
                     }, colors = brandButtonColors()) { Text("清除筛选") }
                     if (filter != Filter.All) OutlinedButton(onClick = { vm.filter.value = Filter.All }) { Text("看全部") }
@@ -805,6 +823,7 @@ private fun DrawerContent(vm: MainViewModel, showDone: Boolean, onSelect: (Filte
     val totals by vm.totals.collectAsStateWithLifecycle()
     val groups by vm.tagGroups.collectAsStateWithLifecycle()
     val selected by vm.selectedTags.collectAsStateWithLifecycle()
+    val stars by vm.selectedStars.collectAsStateWithLifecycle()
     val items by vm.items.collectAsStateWithLifecycle()
     val libraryName by vm.libraryName.collectAsStateWithLifecycle()
     val showFolders by vm.showFolders.collectAsStateWithLifecycle()
@@ -869,6 +888,39 @@ private fun DrawerContent(vm: MainViewModel, showDone: Boolean, onSelect: (Filte
             item {
                 DrawerEntry("继续观看", totals.continued, Icons.Default.History, filter == Filter.Continue) {
                     onSelect(Filter.Continue)
+                }
+            }
+            item {
+                HorizontalDivider(Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 28.dp, end = 12.dp),
+                ) {
+                    Text(
+                        "评分",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = AppColors.Text2,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (stars.isNotEmpty()) {
+                        TextButton(onClick = { vm.selectedStars.value = emptySet() }) { Text("清除 (${stars.size})") }
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                ) {
+                    (5 downTo 0).forEach { n ->
+                        FilterChip(
+                            selected = n in stars,
+                            onClick = { vm.toggleStar(n) },
+                            label = { Text(starLabel(n)) },
+                            shape = AppShapes.Full,
+                        )
+                    }
                 }
             }
             item {
@@ -1051,3 +1103,6 @@ private fun DrawerEntry(
         modifier = Modifier.padding(horizontal = 12.dp),
     )
 }
+
+/** "★★★" for 3, "未评分" for 0 — the labels of the rating filter. */
+internal fun starLabel(n: Int) = if (n <= 0) "未评分" else "★".repeat(n.coerceAtMost(5))
