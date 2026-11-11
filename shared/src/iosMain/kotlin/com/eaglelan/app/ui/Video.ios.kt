@@ -166,3 +166,35 @@ actual fun VideoSurface(player: VideoPlayer, keepScreenOn: Boolean, modifier: Mo
 }
 
 actual val videoSurfaceCoversPoster = true
+
+/** Pages that want the screen kept on; the idle timer is re-enabled when the last one goes. */
+private var keepAwakePages = 0
+
+@OptIn(ExperimentalForeignApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+actual fun PagerVideoSurface(player: VideoPlayer, keepScreenOn: Boolean, modifier: Modifier) {
+    val p = player as AvVideoPlayer
+    UIKitView(
+        factory = { PlayerHostView() },
+        modifier = modifier,
+        update = { view ->
+            if (view.playerLayer.player != p.player) view.playerLayer.player = p.player
+            p.layer = view.playerLayer
+        },
+        properties = UIKitInteropProperties(interactionMode = null),
+    )
+    DisposableEffect(keepScreenOn) {
+        if (keepScreenOn) {
+            keepAwakePages++
+            UIApplication.sharedApplication.idleTimerDisabled = true
+        }
+        onDispose {
+            if (keepScreenOn) {
+                keepAwakePages = (keepAwakePages - 1).coerceAtLeast(0)
+                if (keepAwakePages == 0) UIApplication.sharedApplication.idleTimerDisabled = false
+            }
+        }
+    }
+}
+
+actual val previewPreloadAhead = 3

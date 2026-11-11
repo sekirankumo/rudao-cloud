@@ -78,6 +78,8 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
     val message = MutableStateFlow<String?>(null)
     /** 管理员: the server lets this token rate / trash items from here (LAN only); refreshed with each ping. */
     val canManage = MutableStateFlow(false)
+    /** Connected by LAN address (not the public tunnel): 随机速览 may preload more clips. */
+    val serverIsLan get() = com.eaglelan.app.data.Api.isPrivateHost(prefs.baseUrl)
     /** Rating filter for everyone: 0 = 未评分, 1..5 stars; empty = no filter. */
     val selectedStars = MutableStateFlow<Set<Int>>(emptySet())
     val folders = MutableStateFlow(repo.folders())

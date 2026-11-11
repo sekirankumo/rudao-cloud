@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +19,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -60,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -78,32 +80,46 @@ import com.eaglelan.app.data.LoudMode
 import com.eaglelan.app.data.Loudness
 import com.eaglelan.app.data.LoudnessDto
 import com.eaglelan.app.data.isVideo
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.random.Random
 
-/** One 随机速览 segment: a random window of [lengthMs] starting at [startMs]. */
-private data class Clip(val item: ItemEntity, val startMs: Long, val lengthMs: Long, val loud: LoudnessDto? = null)
+/**
+ * One 随机速览 segment: a random window of [lengthMs] starting at [startMs]. [key] identifies the
+ * page, so pages keep their player when others are removed (a trashed video).
+ */
+private data class Clip(
+    val key: Long,
+    val item: ItemEntity,
+    val startMs: Long,
+    val lengthMs: Long,
+    val loud: LoudnessDto? = null,
+)
 
 /** Deals clips from the pool in shuffled order, reshuffling when it runs out. Trashed items are skipped. */
 private class ClipDeck(private val pool: List<ItemEntity>, private val trashed: Set<String>) {
     private val queue = ArrayDeque<ItemEntity>()
+    private var nextKey = 0L
 
     val isEmpty get() = pool.all { it.id in trashed }
 
     fun next(lengthMs: Long): Clip {
+        val key = nextKey++
         var item: ItemEntity
         do {
             if (queue.isEmpty()) queue.addAll(pool.filter { it.id !in trashed }.shuffled())
-            item = queue.removeFirstOrNull() ?: return Clip(pool.first(), 0, 1000)   // all trashed: caller closes
+            item = queue.removeFirstOrNull() ?: return Clip(key, pool.first(), 0, 1000)   // all trashed: caller closes
         } while (item.id in trashed)
         val dur = (item.duration * 1000).toLong()
-        if (dur <= lengthMs + 1000) return Clip(item, 0, dur.coerceAtLeast(1000))   // short video: play it all
+        if (dur <= lengthMs + 1000) return Clip(key, item, 0, dur.coerceAtLeast(1000))   // short video: play it all
         // skip intros/outros: start somewhere in 5%..95% of the video
         val lo = (dur * 0.05).toLong()
         val hi = (dur * 0.95).toLong() - lengthMs
-        return Clip(item, if (hi > lo) Random.nextLong(lo, hi) else 0, lengthMs)
+        return Clip(key, item, if (hi > lo) Random.nextLong(lo, hi) else 0, lengthMs)
     }
 }
 
@@ -116,9 +132,12 @@ private val CLIP_LENGTHS = listOf(5, 10, 15, 30)
 private const val UNDO_MS = 3000L
 
 /**
- * 随机速览: plays a random [clip length] window of a random video from the current list, then the
- * next one, endlessly. Two players alternate — while one plays, the other is already buffered at
- * the next clip's position — so switching is nearly instant.
+ * 随机速览: random [clip length] windows of random videos from the current list, endlessly, in a
+ * vertical pager — dragging shows the next (or previous) clip moving in, like a short-video feed.
+ *
+ * Players: a small pool covers the previous clip, the current one and the next [previewPreloadAhead]
+ * (one ahead outside the LAN). Spare players sit paused at their clip's start with it buffered, so a
+ * swipe starts playing at once; leaving the window frees a player for a clip further ahead.
  *
  * Works like the desktop plugin: 看全片 keeps playing the current video to its end right here
  * (± 10 s, drag to seek), then previewing carries on; 管理员 tokens on the LAN can rate (1–5,
@@ -147,39 +166,38 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
     // Immersive while previewing.
     ImmersiveMode()
 
-    val players = remember { List(2) { vm.newPlayer(PlayerKind.PREVIEW) } }
+    val ahead = remember { if (vm.serverIsLan) previewPreloadAhead else 1 }
+    val poolSize = ahead + 2                                  // previous + current + ahead
+    val players = remember { List(poolSize) { vm.newPlayer(PlayerKind.PREVIEW) } }
     DisposableEffect(Unit) { onDispose { players.forEach { it.release() } } }
-    val trashed = remember { HashSet<String>() }        // trashed (or pending) this session: never dealt again
+    val slotClip = remember { mutableStateListOf<Long>().apply { repeat(poolSize) { add(-1L) } } }  // clip key per player
+    val slotGen = remember { IntArray(poolSize) }             // invalidates a superseded loudness fetch
+
+    val trashed = remember { HashSet<String>() }              // trashed (or pending) this session: never dealt again
     val deck = remember { ClipDeck(pool, trashed) }
+    val history = remember { mutableStateListOf<Clip>().apply { repeat(ahead + 1) { add(deck.next(clipSec * 1000L)) } } }
+    val pager = rememberPagerState { history.size }
     val stars = remember { mutableStateMapOf<String, Int>() }   // ratings changed this session
-    LaunchedEffect(Unit) { vm.checkConnection() }       // refresh 管理员 for where the phone is right now
-    val slots = remember { mutableStateListOf<Clip?>(null, null) }
+    LaunchedEffect(Unit) { vm.checkConnection() }             // refresh 管理员 for where the phone is right now
     val scope = rememberCoroutineScope()
 
-    var cur by remember { mutableIntStateOf(0) }
+    var curSlot by remember { mutableIntStateOf(0) }
     var paused by remember { mutableStateOf(false) }
     var chrome by remember { mutableStateOf(true) }
     var progress by remember { mutableFloatStateOf(0f) }
     var buffering by remember { mutableStateOf(true) }
-    var clipNo by remember { mutableIntStateOf(1) }
-    var hasFrame by remember { mutableStateOf(false) }
-    var whole by remember { mutableStateOf(false) }          // 看全片: play the current video to its end
+    var tick by remember { mutableIntStateOf(0) }             // re-reads players' hasFrame for the poster
+    var whole by remember { mutableStateOf(false) }           // 看全片: play the current video to its end
     var wholePos by remember { mutableLongStateOf(0L) }
     var wholeDur by remember { mutableLongStateOf(0L) }
-    var seeking by remember { mutableStateOf<Float?>(null) } // slider position while dragging
+    var seeking by remember { mutableStateOf<Float?>(null) }  // slider position while dragging
+    var failures by remember { mutableIntStateOf(0) }
     var toast by remember { mutableStateOf<PreviewToast?>(null) }
     LaunchedEffect(toast) {
         val t = toast ?: return@LaunchedEffect
         delay(t.ms)
         if (toast === t) toast = null
     }
-
-    // Clips are appended to `history` as they are needed, so 上一段 can step back through them.
-    val history = remember { mutableStateListOf<Clip>() }
-    val slotIndex = remember { intArrayOf(-1, -1) }   // which history index each player holds
-    val slotGen = remember { intArrayOf(0, 0) }       // invalidates a superseded prepare
-    var pos by remember { mutableIntStateOf(0) }
-    var pendingNav by remember { mutableIntStateOf(0) }   // +1 下一段, -1 上一段
 
     fun newClip(): Clip = deck.next(clipSecNow * 1000L)
 
@@ -190,51 +208,82 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
             mode,
         )
 
-    /** Load history[index] into a player. Loudness is fetched here, before the clip is needed. */
-    suspend fun prepareInto(slot: Int, index: Int) {
-        if (slotIndex[slot] == index) return
+    /** Loads [clip] into player [slot], paused at its start. Loudness follows when the server answers. */
+    fun assign(slot: Int, clip: Clip) {
         val gen = ++slotGen[slot]
-        val base = history.getOrNull(index) ?: return
-        val loud = vm.loudness(base.item.id)
-        if (slotGen[slot] != gen) return            // superseded by a newer prepare
-        val clip = base.copy(loud = loud)
-        history[index] = clip
-        slots[slot] = clip
         val p = players[slot]
-        p.volume = gainFor(clip, false, loudModeNow)
         p.playWhenReady = false
+        p.volume = gainFor(clip, false, loudModeNow)
         p.setUrl(vm.fileUrl(clip.item))
         p.seekTo(clip.startMs)
-        slotIndex[slot] = index
+        slotClip[slot] = clip.key
+        if (clip.loud == null) scope.launch {
+            val loud = vm.loudness(clip.item.id) ?: return@launch
+            if (slotGen[slot] != gen) return@launch
+            val i = history.indexOfFirst { it.key == clip.key }
+            if (i >= 0) history[i] = history[i].copy(loud = loud)
+            p.volume = gainFor(clip.copy(loud = loud), whole && slot == curSlot, loudModeNow)
+        }
+    }
+
+    /** Makes sure the clips around [index] exist and have players: current first, then ahead, then behind. */
+    fun ensureWindow(index: Int) {
+        while (history.size < index + ahead + 1) history.add(newClip())
+        val order = buildList {
+            add(index)
+            for (i in 1..ahead) add(index + i)
+            if (index > 0) add(index - 1)
+        }.filter { it < history.size }
+        val wanted = order.map { history[it].key }.toSet()
+        val free = ArrayDeque((0 until poolSize).filter { slotClip[it] !in wanted })
+        for (i in order) {
+            val c = history[i]
+            if (c.key in slotClip) continue
+            assign(free.removeFirstOrNull() ?: break, c)
+        }
     }
 
     // Whole-video mode uses one gain from the video's integrated loudness, like the plugin.
     LaunchedEffect(loudMode, whole) {
-        slots.forEachIndexed { i, c ->
-            if (c != null) players[i].volume = gainFor(c, whole && i == cur, loudMode)
+        players.forEachIndexed { s, p ->
+            val c = history.firstOrNull { it.key == slotClip[s] } ?: return@forEachIndexed
+            p.volume = gainFor(c, whole && s == curSlot, loudMode)
         }
     }
 
     // ---- actions shared by buttons, gestures and keys ----------------------------------------
+    fun go(delta: Int) {
+        whole = false
+        val target = pager.currentPage + delta
+        if (target < 0) {
+            toast = PreviewToast("已经是第一段")
+            return
+        }
+        scope.launch {
+            while (history.size <= target) history.add(newClip())
+            pager.animateScrollToPage(target)
+        }
+    }
+
     fun setWhole(on: Boolean) {
-        if (on == whole || slots[cur] == null) return
-        whole = on
+        if (on == whole || history.getOrNull(pager.currentPage) == null) return
         if (on) {
+            whole = true
             paused = false
             toast = PreviewToast("看全片：播完或点「返回速览」回到速览")
         } else {
-            pendingNav = 1                          // back to previewing with the next clip
+            go(1)                                   // back to previewing with the next clip
         }
     }
 
     fun seekBy(sec: Int) {
-        val p = players[cur]
+        val p = players[curSlot]
         val dur = p.duration.takeIf { it > 0 } ?: wholeDur
         p.seekTo((p.currentPosition + sec * 1000L).coerceIn(0, (dur - 500).coerceAtLeast(0)))
     }
 
     fun rate(n: Int) {
-        val item = slots[cur]?.item ?: return
+        val item = history.getOrNull(pager.currentPage)?.item ?: return
         if (!canManage) return
         val old = stars[item.id] ?: item.star
         val new = if (n == old) 0 else n            // the same number again clears it, like the plugin
@@ -249,19 +298,30 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
     }
 
     fun trashCurrent() {
-        val item = slots[cur]?.item ?: return
+        val index = pager.currentPage
+        val item = history.getOrNull(index)?.item ?: return
         if (!canManage || item.id in trashed) return
         trashed += item.id
         vm.trashLater(item.id, UNDO_MS) { trashed -= item.id }
         toast = PreviewToast("已移入回收站：${item.name}", UNDO_MS, undoId = item.id, undoName = item.name)
         whole = false
-        pendingNav = 1
+        if (deck.isEmpty) {
+            vm.message.value = "列表里的视频都已放入回收站"
+            onClose()
+            return
+        }
+        // Drop its pages; the next clip slides into this position (already buffered on its player).
+        val before = (0 until index).count { history[it].item.id == item.id }
+        history.removeAll { it.item.id == item.id }
+        val newIndex = index - before
+        while (history.size < newIndex + ahead + 1) history.add(newClip())
+        if (before > 0) scope.launch { pager.scrollToPage(newIndex) }
     }
 
     fun undoTrash() {
         val t = toast?.takeIf { it.undoId != null } ?: return
         if (vm.undoTrash(t.undoId!!)) {
-            trashed -= t.undoId
+            trashed -= t.undoId                     // back in the deck; it can come up again later
             toast = PreviewToast("已撤销：${t.undoName}")
         }
     }
@@ -269,120 +329,133 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
     // Back: leaves 看全片 first, then the preview (the plugin's Esc).
     PlatformBackHandler(onBack = { if (whole) setWhole(false) else onClose() })
 
+    // ---- playback: whichever clip has settled on screen plays; the rest wait, buffered ----------
     LaunchedEffect(Unit) {
-        history.add(newClip())
-        prepareInto(0, 0)
-        cur = 0
-        history.add(newClip())          // preloaded on the spare player while the first clip plays
-        prepareInto(1, 1)
-
-        var failures = 0
-        while (isActive) {
-            val index = pos
-            val clip = history.getOrNull(index) ?: break
-            if (slotIndex[cur] != index) {       // came back to a clip the other player may already hold
-                val other = 1 - cur
-                if (slotIndex[other] != index) prepareInto(other, index)
-                cur = other
-            }
-            val p = players[cur]
-            // Prepare the following clip on the idle player while this one plays, so 下一段 is instant.
-            if (history.size <= index + 1) history.add(newClip())
-            val spare = 1 - cur
-            if (slotIndex[spare] != index + 1) scope.launch { prepareInto(spare, index + 1) }
-            p.seekTo(clip.startMs)
-            progress = 0f
-            var startPos = -1L
-            var failed = false
-            p.playWhenReady = !paused
-            while (isActive) {
-                p.playWhenReady = !paused
-                buffering = p.isBuffering
-                hasFrame = p.hasFrame
-                if (p.hasError) {
-                    failed = true
-                    break
-                }
-                if (pendingNav != 0 || p.isEnded) break
-                if (whole) {
-                    val d = p.duration.takeIf { it > 0 } ?: (clip.item.duration * 1000).toLong()
-                    wholeDur = d
-                    wholePos = p.currentPosition
-                    progress = if (d > 0) (wholePos.toFloat() / d).coerceIn(0f, 1f) else 0f
-                } else {
-                    // count from where playback really started (keyframe seeks land a little early)
-                    if (p.isPlaying && startPos < 0) startPos = p.currentPosition
-                    if (startPos >= 0) {
-                        val played = p.currentPosition - startPos
-                        progress = (played.toFloat() / clip.lengthMs).coerceIn(0f, 1f)
-                        if (played >= clip.lengthMs) break
+        snapshotFlow { history.getOrNull(pager.settledPage)?.key }
+            .distinctUntilChanged()
+            .collectLatest { key ->
+                val index = history.indexOfFirst { it.key == key }
+                if (key == null || index < 0) return@collectLatest
+                ensureWindow(index)
+                val slot = slotClip.indexOf(key)
+                if (slot < 0) return@collectLatest
+                curSlot = slot
+                players.forEachIndexed { s, p -> if (s != slot) p.playWhenReady = false }
+                val clip = history[index]
+                val p = players[slot]
+                if (abs(p.currentPosition - clip.startMs) > 1500) p.seekTo(clip.startMs)
+                p.volume = gainFor(clip, false, loudModeNow)
+                whole = false
+                progress = 0f
+                var startPos = -1L
+                var failed = false
+                try {
+                    while (true) {
+                        p.playWhenReady = !paused
+                        buffering = p.isBuffering
+                        tick++
+                        if (p.hasError) {
+                            failed = true
+                            break
+                        }
+                        if (p.isEnded) break
+                        if (whole) {
+                            val d = p.duration.takeIf { it > 0 } ?: (clip.item.duration * 1000).toLong()
+                            wholeDur = d
+                            wholePos = p.currentPosition
+                            progress = if (d > 0) (wholePos.toFloat() / d).coerceIn(0f, 1f) else 0f
+                        } else {
+                            // count from where playback really started (keyframe seeks land a little early)
+                            if (p.isPlaying && startPos < 0) startPos = p.currentPosition
+                            if (startPos >= 0) {
+                                val played = p.currentPosition - startPos
+                                progress = (played.toFloat() / clip.lengthMs).coerceIn(0f, 1f)
+                                if (played >= clip.lengthMs) break
+                            }
+                        }
+                        delay(100)
                     }
+                } finally {
+                    p.playWhenReady = false
+                    if (slotClip[slot] == key) p.seekTo(clip.startMs)   // ready again if the user swipes back
                 }
-                delay(100)
+                whole = false
+                failures = if (failed) failures + 1 else 0
+                if (failures >= 5) {
+                    vm.message.value = "连续多个视频无法播放，请检查连接"
+                    onClose()
+                    return@collectLatest
+                }
+                go(1)                                   // clip done: slide to the next one
+                awaitCancellation()                     // until the next clip settles
             }
-            p.playWhenReady = false
-            whole = false
-
-            failures = if (failed) failures + 1 else 0
-            if (failures >= 5) {
-                vm.message.value = "连续多个视频无法播放，请检查连接"
-                onClose()
-                break
-            }
-            if (deck.isEmpty) {
-                vm.message.value = "列表里的视频都已放入回收站"
-                onClose()
-                break
-            }
-
-            val nav = pendingNav
-            pendingNav = 0
-            val step = if (nav < 0) -1 else 1
-            var target = pos + step
-            // Going back skips clips trashed meanwhile; going forward replaces them with fresh ones.
-            if (step < 0) while (target >= 0 && history[target].item.id in trashed) target--
-            if (target < 0) {
-                toast = PreviewToast("已经是第一段")
-                continue                        // replay the current clip from its start
-            }
-            pos = target
-            while (history.size <= pos) history.add(newClip())
-            if (history[pos].item.id in trashed) {
-                history[pos] = newClip()
-                for (i in 0..1) if (slotIndex[i] == pos) slotIndex[i] = -1   // that player holds the old clip
-            }
-            clipNo = pos + 1
-            if (failed) delay(300)
-        }
     }
 
-    val clip = slots[cur]
+    val clip = history.getOrNull(pager.currentPage)
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        if (clip != null && clip.item.hasThumb) {
-            AsyncImage(vm.thumbUrl(clip.item), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-        }
-        VideoSurface(
-            players[cur],
-            keepScreenOn = true,
-            keepContentOnPlayerReset = true,
+        VerticalPager(
+            state = pager,
+            key = { history[it].key },
+            beyondViewportPageCount = 1,                 // the next page's surface exists before it's dragged in
+            userScrollEnabled = !whole,                  // 看全片: the slider owns drags
             modifier = Modifier.fillMaxSize(),
-        )
-        if (videoSurfaceCoversPoster && !hasFrame && clip != null && clip.item.hasThumb) {
-            AsyncImage(vm.thumbUrl(clip.item), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        ) { page ->
+            val c = history.getOrNull(page) ?: return@VerticalPager
+            val slot = slotClip.indexOf(c.key)
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    // tap = overlay, double-tap = pause (swipes belong to the pager)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { chrome = !chrome },
+                            onDoubleTap = { paused = !paused },
+                        )
+                    }
+                    // Mouse wheel: one notch down = next clip, up = previous.
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            var last = 0L
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.type != PointerEventType.Scroll) continue
+                                val dy = event.changes.first().scrollDelta.y
+                                event.changes.forEach { it.consume() }
+                                val now = nowMs()
+                                if (dy == 0f || now - last < 400) continue
+                                last = now
+                                go(if (dy > 0) 1 else -1)
+                            }
+                        }
+                    },
+            ) {
+                if (c.item.hasThumb) {
+                    AsyncImage(vm.thumbUrl(c.item), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                }
+                if (slot >= 0) {
+                    val p = players[slot]
+                    PagerVideoSurface(p, keepScreenOn = true, modifier = Modifier.fillMaxSize())
+                    tick
+                    if (videoSurfaceCoversPoster && !p.hasFrame && c.item.hasThumb) {
+                        AsyncImage(vm.thumbUrl(c.item), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    }
+                }
+            }
         }
 
         // Keys, as in the desktop plugin: → ↓ next (看全片: +10 s), ← ↑ previous (−10 s), space pause,
         // Enter 看全片 / back, 1–5 rate (0 clears), Delete trash, Z undo.
         KeyHandler { e ->
             when (e.key) {
-                Key.DirectionRight -> if (whole) seekBy(10) else pendingNav = 1
-                Key.DirectionLeft -> if (whole) seekBy(-10) else pendingNav = -1
-                Key.DirectionDown, Key.PageDown -> pendingNav = 1
-                Key.DirectionUp, Key.PageUp -> pendingNav = -1
+                Key.DirectionRight -> if (whole) seekBy(10) else go(1)
+                Key.DirectionLeft -> if (whole) seekBy(-10) else go(-1)
+                Key.DirectionDown, Key.PageDown -> go(1)
+                Key.DirectionUp, Key.PageUp -> go(-1)
                 Key.Spacebar, Key.K -> paused = !paused
                 Key.Enter, Key.NumPadEnter -> setWhole(!whole)
                 Key.Escape -> if (whole) setWhole(false) else onClose()
@@ -399,49 +472,6 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
             true
         }
 
-        // Gestures: tap = overlay, double-tap = pause, swipe up = next clip, swipe down = previous.
-        Box(
-            Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { chrome = !chrome },
-                        onDoubleTap = { paused = !paused },
-                    )
-                }
-                // Mouse wheel: one notch down = next clip, up = previous.
-                .pointerInput(Unit) {
-                    awaitPointerEventScope {
-                        var last = 0L
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            if (event.type != PointerEventType.Scroll) continue
-                            val dy = event.changes.first().scrollDelta.y
-                            event.changes.forEach { it.consume() }
-                            val now = nowMs()
-                            if (dy == 0f || now - last < 400) continue
-                            last = now
-                            pendingNav = if (dy > 0) 1 else -1
-                        }
-                    }
-                }
-                .pointerInput(Unit) {
-                    var dy = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { dy = 0f },
-                        onVerticalDrag = { change, d ->
-                            change.consume()
-                            dy += d
-                        },
-                        onDragEnd = {
-                            val threshold = 80.dp.toPx()
-                            if (dy < -threshold) pendingNav = 1
-                            else if (dy > threshold) pendingNav = -1
-                        },
-                    )
-                },
-        )
-
         if (paused) {
             Icon(
                 Icons.Default.PlayArrow,
@@ -453,7 +483,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
                     .background(MediaColors.Scrim, CircleShape)
                     .padding(12.dp),
             )
-        } else if (buffering) {
+        } else if (buffering && !pager.isScrollInProgress) {
             CircularProgressIndicator(
                 Modifier
                     .align(Alignment.Center)
@@ -503,7 +533,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
                     )
                     Text(
                         if (whole) "全片 · ${formatMillis(wholePos)} / ${formatMillis(wholeDur)}"
-                        else "随机速览 · 第 $clipNo 段 · 从 ${formatMillis(clip.startMs)} 开始",
+                        else "随机速览 · 第 ${pager.currentPage + 1} 段 · 从 ${formatMillis(clip.startMs)} 开始",
                         color = MediaColors.Text2,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -557,8 +587,8 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
                         onValueChange = { seeking = it },
                         onValueChangeFinished = {
                             seeking?.let { f ->
-                                val d = players[cur].duration.takeIf { it > 0 } ?: wholeDur
-                                players[cur].seekTo((f * d).toLong())
+                                val d = players[curSlot].duration.takeIf { it > 0 } ?: wholeDur
+                                players[curSlot].seekTo((f * d).toLong())
                             }
                             seeking = null
                         },
@@ -594,7 +624,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { pendingNav = -1 }) {
+                    IconButton(onClick = { go(-1) }) {
                         Icon(Icons.Default.SkipPrevious, "上一段", tint = MediaColors.Text)
                     }
                     if (whole) {
@@ -614,7 +644,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
                             Icon(Icons.Default.Forward10, "快进 10 秒", tint = MediaColors.Text)
                         }
                     }
-                    IconButton(onClick = { pendingNav = 1 }) {
+                    IconButton(onClick = { go(1) }) {
                         Icon(Icons.Default.SkipNext, "下一段", tint = MediaColors.Text)
                     }
                     Spacer(Modifier.weight(1f))
@@ -623,7 +653,7 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
                         shape = AppShapes.Full,
                         colors = ButtonDefaults.textButtonColors(containerColor = MediaColors.Chip, contentColor = MediaColors.Text),
                     ) {
-                        Text(if (whole) "↩ 返回速览" else "▶ 看全片")
+                        Text(if (whole) "返回速览" else "看全片")
                     }
                 }
             }

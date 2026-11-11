@@ -140,6 +140,14 @@ class Api(private val client: HttpClient, val baseUrl: String, private val token
          * "192.168.1.100" -> "http://192.168.1.100:41600" (the phone server's default port).
          * A https:// address keeps its implicit 443, e.g. "https://media.example.com" stays as is.
          */
+        /** True for a private LAN address (10.x, 172.16–31.x, 192.168.x), i.e. not through the tunnel. */
+        fun isPrivateHost(baseUrl: String): Boolean {
+            val host = baseUrl.substringAfter("://").substringBefore('/').substringBefore(':')
+            val p = host.split('.').map { it.toIntOrNull() ?: return false }
+            if (p.size != 4) return false
+            return p[0] == 10 || (p[0] == 172 && p[1] in 16..31) || (p[0] == 192 && p[1] == 168)
+        }
+
         fun normalizeBaseUrl(input: String): String {
             var s = input.trim().trimEnd('/')
             if (!s.contains("://")) s = "http://$s"

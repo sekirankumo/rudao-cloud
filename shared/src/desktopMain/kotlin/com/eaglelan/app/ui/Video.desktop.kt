@@ -274,3 +274,10 @@ actual fun VideoSurface(player: VideoPlayer, keepScreenOn: Boolean, modifier: Mo
 }
 
 actual val videoSurfaceCoversPoster = false
+
+@Composable
+actual fun PagerVideoSurface(player: VideoPlayer, keepScreenOn: Boolean, modifier: Modifier) =
+    VideoSurface(player, keepScreenOn, modifier)
+
+/** Every libVLC player is heavy, so Windows keeps only the next clip ready. */
+actual val previewPreloadAhead = 1

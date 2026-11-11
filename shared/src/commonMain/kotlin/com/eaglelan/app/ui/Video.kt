@@ -59,3 +59,13 @@ expect fun VideoSurface(
  * frame has to be drawn on top until [VideoPlayer.hasFrame].
  */
 expect val videoSurfaceCoversPoster: Boolean
+
+/**
+ * A [VideoSurface] for pages that move (随机速览's vertical pager): it follows the page while it is
+ * dragged and can be on screen next to other surfaces. Each page shows its own player.
+ */
+@Composable
+expect fun PagerVideoSurface(player: VideoPlayer, keepScreenOn: Boolean, modifier: Modifier = Modifier)
+
+/** How many upcoming 随机速览 clips are kept loaded on spare players (on the LAN). */
+expect val previewPreloadAhead: Int
