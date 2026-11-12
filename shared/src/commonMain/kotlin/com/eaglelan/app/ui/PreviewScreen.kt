@@ -137,9 +137,11 @@ private class ClipDeck(
         val ok = { i: ItemEntity -> i.id !in trashed && (all || orientation.fits(i)) }
         var at = queue.indexOfFirst(ok)
         if (at < 0) {                               // nothing usable left in this round: reshuffle
+            // Shuffle in every video, not only those fitting the screen now: after the phone is
+            // turned, the round must still hold the other orientation's videos (not just squares).
             queue.clear()
-            queue.addAll(pool.filter(ok).shuffled())
-            at = if (queue.isEmpty()) -1 else 0
+            queue.addAll(pool.filter { it.id !in trashed }.shuffled())
+            at = queue.indexOfFirst(ok)
         }
         if (at < 0) return Clip(key, pool.first(), 0, 1000)   // all trashed: caller closes
         val item = queue.removeAt(at)
