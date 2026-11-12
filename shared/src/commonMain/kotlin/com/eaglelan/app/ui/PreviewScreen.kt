@@ -71,6 +71,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -100,20 +101,48 @@ private data class Clip(
     val loud: LoudnessDto? = null,
 )
 
-/** Deals clips from the pool in shuffled order, reshuffling when it runs out. Trashed items are skipped. */
-private class ClipDeck(private val pool: List<ItemEntity>, private val trashed: Set<String>) {
+/**
+ * 按屏幕方向挑视频: when [enabled], only videos shaped like the screen are dealt. Square ones and
+ * ones without a known size fit both ways.
+ */
+private class OrientationFilter(var enabled: Boolean, var landscape: Boolean) {
+    fun fits(item: ItemEntity): Boolean {
+        if (!enabled || item.width <= 0 || item.height <= 0) return true
+        return if (landscape) item.width >= item.height else item.height >= item.width
+    }
+}
+
+/**
+ * Deals clips from the pool in shuffled order, reshuffling when it runs out. Trashed items are
+ * skipped, and so are videos that don't fit the screen's orientation — unless none in the pool do.
+ */
+private class ClipDeck(
+    private val pool: List<ItemEntity>,
+    private val trashed: Set<String>,
+    private val orientation: OrientationFilter,
+) {
     private val queue = ArrayDeque<ItemEntity>()
     private var nextKey = 0L
 
     val isEmpty get() = pool.all { it.id in trashed }
 
+    /** True when the orientation filter is on but nothing in the pool fits it (everything is dealt). */
+    val noneFit get() = orientation.enabled && pool.none { it.id !in trashed && orientation.fits(it) }
+
+    fun fits(item: ItemEntity) = noneFit || orientation.fits(item)
+
     fun next(lengthMs: Long): Clip {
         val key = nextKey++
-        var item: ItemEntity
-        do {
-            if (queue.isEmpty()) queue.addAll(pool.filter { it.id !in trashed }.shuffled())
-            item = queue.removeFirstOrNull() ?: return Clip(key, pool.first(), 0, 1000)   // all trashed: caller closes
-        } while (item.id in trashed)
+        val all = noneFit
+        val ok = { i: ItemEntity -> i.id !in trashed && (all || orientation.fits(i)) }
+        var at = queue.indexOfFirst(ok)
+        if (at < 0) {                               // nothing usable left in this round: reshuffle
+            queue.clear()
+            queue.addAll(pool.filter(ok).shuffled())
+            at = if (queue.isEmpty()) -1 else 0
+        }
+        if (at < 0) return Clip(key, pool.first(), 0, 1000)   // all trashed: caller closes
+        val item = queue.removeAt(at)
         val dur = (item.duration * 1000).toLong()
         if (dur <= lengthMs + 1000) return Clip(key, item, 0, dur.coerceAtLeast(1000))   // short video: play it all
         // skip intros/outros: start somewhere in 5%..95% of the video
@@ -174,7 +203,11 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
     val slotGen = remember { IntArray(poolSize) }             // invalidates a superseded loudness fetch
 
     val trashed = remember { HashSet<String>() }              // trashed (or pending) this session: never dealt again
-    val deck = remember { ClipDeck(pool, trashed) }
+    val matchOrientation by vm.previewMatchOrientation.collectAsStateWithLifecycle()
+    val windowSize = LocalWindowInfo.current.containerSize
+    val landscape = windowSize.width > windowSize.height
+    val orientation = remember { OrientationFilter(matchOrientation, landscape) }
+    val deck = remember { ClipDeck(pool, trashed, orientation) }
     val history = remember { mutableStateListOf<Clip>().apply { repeat(ahead + 1) { add(deck.next(clipSec * 1000L)) } } }
     val pager = rememberPagerState { history.size }
     val stars = remember { mutableStateMapOf<String, Int>() }   // ratings changed this session
@@ -241,6 +274,26 @@ fun PreviewScreen(vm: MainViewModel, onClose: () -> Unit) {
             if (c.key in slotClip) continue
             assign(free.removeFirstOrNull() ?: break, c)
         }
+    }
+
+    // Turned the phone (or the setting): keep the clip on screen, re-deal the upcoming ones that no
+    // longer fit. The previous clip stays, so 上一段 still goes back to it.
+    LaunchedEffect(matchOrientation, landscape) {
+        orientation.enabled = matchOrientation
+        orientation.landscape = landscape
+        if (deck.noneFit) {
+            toast = PreviewToast("当前列表里没有${if (landscape) "横向" else "竖向"}的视频，先放全部", 3000)
+            return@LaunchedEffect
+        }
+        val cur = pager.currentPage
+        var changed = false
+        for (i in cur + 1 until history.size) {
+            if (!deck.fits(history[i].item)) {
+                history[i] = newClip()
+                changed = true
+            }
+        }
+        if (changed) ensureWindow(cur)
     }
 
     // Whole-video mode uses one gain from the video's integrated loudness, like the plugin.

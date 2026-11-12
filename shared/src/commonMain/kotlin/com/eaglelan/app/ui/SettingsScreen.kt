@@ -51,6 +51,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, onChangeServer: () -> 
     val libraryName by vm.libraryName.collectAsStateWithLifecycle()
     val loudMode by vm.loudMode.collectAsStateWithLifecycle()
     val previewSeconds by vm.previewSeconds.collectAsStateWithLifecycle()
+    val matchOrientation by vm.previewMatchOrientation.collectAsStateWithLifecycle()
     val showFolders by vm.showFolders.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize().background(AppColors.Background)) {
@@ -132,6 +133,33 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit, onChangeServer: () -> 
                         options = listOf(5, 10, 15, 30).map { it to "${it}秒" },
                         selected = previewSeconds,
                         onSelect = vm::setPreviewSeconds,
+                    )
+                }
+                HorizontalDivider(Modifier.padding(start = 16.dp), color = AppColors.Surface3)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clickable(role = Role.Switch) { vm.setPreviewMatchOrientation(!matchOrientation) }
+                        .padding(16.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("随机速览按屏幕方向挑视频", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "横屏只放横向视频，竖屏只放竖向视频；正方形的两边都放",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.Text2,
+                        )
+                    }
+                    Switch(
+                        checked = matchOrientation,
+                        onCheckedChange = null,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = AppColors.Brand,
+                            checkedThumbColor = Color.White,
+                            uncheckedTrackColor = AppColors.Surface3,
+                            uncheckedThumbColor = AppColors.Text3,
+                            uncheckedBorderColor = AppColors.Text3,
+                        ),
                     )
                 }
             }

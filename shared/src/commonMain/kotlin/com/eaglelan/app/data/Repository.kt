@@ -81,6 +81,11 @@ class Prefs(private val sp: Settings) {
         get() = sp.getInt("previewSeconds", 10)
         set(v) = sp.putInt("previewSeconds", v)
 
+    /** 随机速览 only deals videos shaped like the screen (landscape when held sideways, portrait upright). */
+    var previewMatchOrientation: Boolean
+        get() = sp.getBoolean("previewMatchOrientation", false)
+        set(v) = sp.putBoolean("previewMatchOrientation", v)
+
     var loudMode: String?
         get() = sp.getStringOrNull("loudMode")
         set(v) = putOrRemove("loudMode", v)

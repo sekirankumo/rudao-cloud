@@ -144,6 +144,7 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
     val showFolders = MutableStateFlow(prefs.showFolders)
     val loudMode = MutableStateFlow(LoudMode.from(prefs.loudMode))
     val previewSeconds = MutableStateFlow(prefs.previewSeconds)
+    val previewMatchOrientation = MutableStateFlow(prefs.previewMatchOrientation)
 
     val serverUrl get() = prefs.baseUrl
     val serverToken get() = prefs.token
@@ -371,6 +372,11 @@ class MainViewModel(private val services: AppServices) : ViewModel() {
     }
 
     suspend fun loudness(id: String) = repo.loudness(id)
+
+    fun setPreviewMatchOrientation(on: Boolean) {
+        previewMatchOrientation.value = on
+        prefs.previewMatchOrientation = on
+    }
 
     fun setPreviewSeconds(sec: Int) {
         previewSeconds.value = sec
