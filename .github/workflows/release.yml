@@ -1,4 +1,5 @@
-# Push a tag like v0.5.0 to build all three apps and publish them as one GitHub Release:
+# Push a tag like v0.5.0 to build all three apps and publish them as one GitHub Release
+# (Android + Windows first; the iOS .ipa is added to the same release when its slower build ends):
 #   rudao-cloud-vX.apk           Android, signed (the app updates itself from it)
 #   rudao-cloud-vX-windows.exe   Windows installer (the app downloads and runs it to update)
 #   rudao-cloud-vX.ipa           iOS, unsigned: sideload with AltStore / Sideloadly, which sign it
@@ -94,8 +95,11 @@ jobs:
           name: ios
           path: rudao-cloud-*.ipa
 
+  # Android and Windows go out as soon as they are built (~5 min); iOS takes 3-4x longer on the
+  # macOS runner, so its .ipa is attached to the same release by publish-ios when it is done.
+  # The iOS app only offers an update once the release has an .ipa, so nothing breaks meanwhile.
   publish:
-    needs: [android, windows, ios]
+    needs: [android, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,8 +107,12 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
+          name: android
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: dist
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,3 +120,16 @@ jobs:
           git fetch --force --tags
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
+
+  publish-ios:
+    needs: [ios, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios
+          path: dist
+      - name: Attach the iOS build to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.ipa --clobber --repo "$GITHUB_REPOSITORY"
